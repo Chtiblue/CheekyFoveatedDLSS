@@ -498,6 +498,14 @@ void test_temporal_policy() {
                 0.100, 0.150, true}
     );
     expect(result.reacquired, "new sample after return is marked reacquired");
+
+    GazeTemporalPolicyState blink{};
+    result = update_gaze_temporal_policy(blink, {2.0, 1, 0.2F, 0.3F, 0.5F, 0.5F, 0.0F, 0.400, 0.150, true});
+    result = update_gaze_temporal_policy(blink, {2.3, 1, 0.0F, 0.0F, 0.5F, 0.5F, 0.0F, 0.400, 0.150, false});
+    expect(result.using_gaze && std::abs(result.center_u - 0.2F) < 0.0001F,
+        "a 300 ms blink within a 400 ms hold keeps the last gaze");
+    result = update_gaze_temporal_policy(blink, {2.35, 2, 0.21F, 0.3F, 0.5F, 0.5F, 0.0F, 0.400, 0.150, true});
+    expect(result.using_gaze && !result.reacquired, "gaze after a held blink does not reset DLSS history");
 }
 
 void test_reset_policy() {
@@ -2227,6 +2235,7 @@ void test_afw_gaze_integration() {
     fresh(); evaluate(); apply_next_jump_preview(preview = settings, 700);
     expect(!preview.next_jump_visible, "One missing future eye suppresses an incomplete preview");
     sample.status_flags &= ~CHEEKY_GAZE_STATUS_GAZE_VALID;
+    settings.gaze_hold_ms = 100.F;
     Sleep(110); publish(); expect(evaluate() && !gaze_diagnostics().afw_fresh_sample, "Tracking loss enters hold/return policy");
     Sleep(160); publish(); expect(evaluate() && !gaze_diagnostics().using_gaze && crop.input_width == preview_crop.input_width,
         "Tracking loss moves to fallback placement without resizing the gaze allocation");

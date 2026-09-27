@@ -84,6 +84,8 @@ struct Settings {
     float next_jump_offset_x{}, next_jump_offset_y{};
     float next_jump_width{}, next_jump_height{};
     float gaze_smoothing_ms{20.0F};
+    // Shorter gaze loss (a blink) keeps the last gaze without a DLSS history reset.
+    float gaze_hold_ms{400.0F};
     std::uint32_t gaze_quantization_pixels{8U};
     float gaze_jump_reset_ratio{0.125F};
 

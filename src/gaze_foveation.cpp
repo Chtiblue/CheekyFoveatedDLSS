@@ -18,8 +18,10 @@ namespace cheeky::foveated_dlss {
 namespace {
 
 constexpr double gaze_stale_seconds = 0.050;
-constexpr double gaze_hold_seconds = 0.100;
 constexpr double gaze_return_seconds = 0.150;
+double gaze_hold_seconds(const Settings& settings) {
+    return std::clamp(static_cast<double>(settings.gaze_hold_ms), 0.0, 1000.0) / 1000.0;
+}
 
 struct AfwGazeState {
     std::array<GazeTemporalPolicyState, 2> temporal{};
@@ -307,7 +309,7 @@ bool calculate_afw_crop(const Settings& settings, DlssViewId view_id, IUnknown* 
             projection.projections[settings.afw_source_eye], projection.projections[eye]) : fixed_center;
         const auto filtered = update_gaze_temporal_policy(afw.temporal[eye],
             {seconds_between(now, 0), snapshot.predicted_display_time, raw[eye].u, raw[eye].v,
-                eye_fallback.u, eye_fallback.v, settings.gaze_smoothing_ms, gaze_hold_seconds, gaze_return_seconds, valid});
+                eye_fallback.u, eye_fallback.v, settings.gaze_smoothing_ms, gaze_hold_seconds(settings), gaze_return_seconds, valid});
         reacquired |= filtered.reacquired; tracking |= filtered.using_gaze;
         bounds.include({filtered.center_u, filtered.center_v, 1}, settings.afw_gaze_width, settings.afw_gaze_height);
         afw_mask_include(mask, {filtered.center_u, filtered.center_v, 1}, settings.afw_gaze_width, settings.afw_gaze_height,
@@ -906,7 +908,7 @@ bool calculate_coordinated_crop(
             fallback.u,
             fallback.v,
             settings.gaze_smoothing_ms,
-            gaze_hold_seconds,
+            gaze_hold_seconds(settings),
             gaze_return_seconds,
             use_sample,
         }

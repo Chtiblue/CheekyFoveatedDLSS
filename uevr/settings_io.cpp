@@ -48,7 +48,7 @@ std::string_view setting_group(std::string_view key) {
     if (key.starts_with("Nr")) return "nr";
     for (const auto gaze : {"XOffset", "HeightOffset", "InvertStereoXOffset", "CenterMode",
             "AutoStereoAlignment", "EyeCalibrationContinuous", "EyeCalibrationMethod", "EyeCalibrationLearnedMethod", "EyeCalibrationLearnedSignature", "EyeCalibrationLearnedSessions", "AlignedHeightOffset", "ShowNextJumpTarget", "SimulationPattern",
-            "GazeSmoothingMs", "GazeQuantizationPixels", "GazeJumpResetRatio",
+            "GazeSmoothingMs", "GazeHoldMs", "GazeQuantizationPixels", "GazeJumpResetRatio",
             "AfwManualCoverage", "AfwAutomaticCoverage", "AfwWarpMargin"})
         if (key == gaze) return "gaze";
     return "sr";
