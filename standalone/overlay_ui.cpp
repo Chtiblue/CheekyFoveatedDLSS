@@ -167,7 +167,7 @@ void draw_sr(Settings& s, bool rr) {
 }
 
 void draw_gaze(Settings& s) {
-    combo("Foveation center", s.center_mode, "Fixed\0Runtime gaze (OpenXR / OpenVR)\0Simulated gaze\0");
+    combo("Foveation center", s.center_mode, "Fixed\0Runtime gaze (OpenXR / OpenVR / LibOVR)\0Simulated gaze\0");
     ImGui::Checkbox("Automatic stereo alignment", &s.auto_stereo_alignment);
     if (s.center_mode == FoveationCenterMode::openxr_gaze)
         ImGui::TextWrapped("Runtime gaze needs the Cheeky OpenXR layer or a supported OpenVR runtime. Fixed placement is used when tracking is unavailable.");
@@ -287,7 +287,7 @@ const char* gaze_warning(const Settings& s, std::string_view snapshot) {
         (!s.enabled && !(s.nr_enabled && s.nr_foveated))) return nullptr;
     const auto gaze = member(snapshot, "gaze");
     if (gaze.empty()) return "Waiting for eye-tracking diagnostics.";
-    if (!flag(gaze, "layer")) return "Eye tracking unavailable: no active OpenXR layer or supported OpenVR adapter. Using fixed placement.";
+    if (!flag(gaze, "layer")) return "Eye tracking unavailable: no active OpenXR layer or supported OpenVR/LibOVR adapter. Using fixed placement.";
     if (!flag(gaze, "abi")) return "Eye tracking unavailable: update the OpenXR layer to match this runtime. Using fixed placement.";
     const auto flags = static_cast<unsigned>(number(gaze, "status_flags"));
     if (!(flags & CHEEKY_GAZE_STATUS_SYSTEM_SUPPORTED)) return "Eye tracking not detected. Using fixed placement.";
@@ -326,6 +326,7 @@ const char* alignment_name(unsigned source) {
     case 1: return "Streamline projection";
     case 2: return "OpenXR";
     case 3: return "OpenVR";
+    case 4: return "LibOVR";
     default: return "Manual fallback";
     }
 }
@@ -363,6 +364,19 @@ void draw_gaze_details(std::string_view snapshot) {
                  {"Tracking valid", CHEEKY_GAZE_STATUS_GAZE_VALID},
                  {"Submission mapping ready", CHEEKY_GAZE_STATUS_MAPPING_READY}})
             ImGui::TextWrapped("%s: %s", item.first, gaze.empty() ? "unavailable" : (flags & item.second) ? "Yes" : "No");
+        const auto libovr = member(snapshot, "libovr");
+        if (flag(libovr, "hooked")) {
+            ImGui::SeparatorText("LibOVR runtime");
+            diagnostic_line(libovr, "Runtime module", "module");
+            diagnostic_line(libovr, "Layer header layout", "layout");
+            diagnostic_line(libovr, "Frames observed", "frames");
+            diagnostic_line(libovr, "Frames with stereo projection", "projection_frames");
+            const auto pvr = member(libovr, "pvr");
+            diagnostic_line(pvr, "Pimax PVR client", "client");
+            diagnostic_line(pvr, "Game PVR session found", "session_captured");
+            diagnostic_line(pvr, "Eye tracker supplying gaze", "gaze_valid");
+            diagnostic_line(pvr, "Valid gaze samples", "valid_samples");
+        }
         for (unsigned i = 0; i < 2; ++i) {
             const auto eye = array_object(member(gaze, "eyes"), i);
             ImGui::SeparatorText(i ? "Right eye" : "Left eye");

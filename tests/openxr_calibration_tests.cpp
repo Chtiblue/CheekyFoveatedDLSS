@@ -1721,7 +1721,7 @@ void retained_calibration(bool source12, bool submit11, EyeCalibrationBackend ba
     void* data{}; check(upload->Map(0, nullptr, &data));
     memcpy(data, background.data(), background.size() * 4); upload->Unmap(0, nullptr);
     std::array<std::uint64_t, 2> views{9101, 9102};
-    std::uint64_t session = backend == EyeCalibrationBackend::openxr ? 9901 : 0;
+    std::uint64_t session = backend == EyeCalibrationBackend::openvr ? 0 : 9901;
     unsigned source_width = size;
     float right_bound = 1;
     bool swapped = false;
@@ -1856,6 +1856,8 @@ int run_retained_calibration_tests() {
             retained_calibration(true, false, backend);
         }
         retained_calibration(true, true, EyeCalibrationBackend::openxr);
+        // LibOVR (D3D11 swap chains) follows the OpenXR frame-loop policy.
+        retained_calibration(false, true, EyeCalibrationBackend::libovr);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Retained calibration: " << e.what() << '\n'; cleanup();

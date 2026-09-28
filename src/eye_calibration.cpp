@@ -1494,7 +1494,7 @@ bool eye_calibration_frame(EyeCalibrationBackend backend, std::uint64_t session_
             continue;
         f.gpu12_used = f.classified = false;
         f.external_sources = {}; f.external_used = false;
-        f.pipelined = backend == EyeCalibrationBackend::openxr && graphics_api == 11;
+        f.pipelined = eye_calibration_frame_loop(backend) && graphics_api == 11;
         // Native DX12 submissions can also reuse the previous eye under AFW.
         // Keep both source proofs, without selecting the mixed DX12/DX11 readback path.
         f.collect_source_pair = graphics_api == 12;
@@ -1561,7 +1561,7 @@ void eye_calibration_stamp(ID3D11DeviceContext* context, ID3D11Resource* output,
         poll(s);
         observe_source(s, view, width, height);
         if (retaining_calibration(s)) return;
-        const bool continuous = s.backend == EyeCalibrationBackend::openxr;
+        const bool continuous = eye_calibration_frame_loop(s.backend);
         const unsigned continuous_c = continuous ? continuous_candidate(s, view) : 2;
         if (continuous && (s.current < 0 || s.ring[s.current].epoch != s.epoch ||
                 s.ring[s.current].submits || s.ring[s.current].invalid)) {
@@ -1676,7 +1676,7 @@ void eye_calibration_external_source(std::uint64_t view, unsigned x, unsigned y,
         observe_source(s, view, width, height);
         // This bridge joins native Vulkan renders to the host's D3D11 XR
         // transfer. Native Vulkan XR submissions need a separate capture path.
-        if (s.backend != EyeCalibrationBackend::openxr || s.stats.submission_graphics_api != 11 ||
+        if (!eye_calibration_frame_loop(s.backend) || s.stats.submission_graphics_api != 11 ||
             retaining_calibration(s)) return;
         s.stats.source_graphics_api = graphics_api;
         const unsigned c = continuous_candidate(s, view);
@@ -1723,7 +1723,7 @@ void eye_calibration_stamp12(ID3D12GraphicsCommandList* list, ID3D12Resource* ou
         CpuScope cpu{s};
         observe_source(s, view, width, height);
         if (retaining_calibration(s)) return;
-        const bool continuous = s.backend == EyeCalibrationBackend::openxr && s.stats.submission_graphics_api == 11;
+        const bool continuous = eye_calibration_frame_loop(s.backend) && s.stats.submission_graphics_api == 11;
         const unsigned continuous_c = continuous ? continuous_candidate(s, view) : 2;
         if (continuous && (s.current < 0 || s.ring[s.current].epoch != s.epoch ||
                 s.ring[s.current].submits || s.ring[s.current].invalid)) {
@@ -2125,7 +2125,7 @@ const char* eye_calibration_status(const EyeCalibrationStats& stats) noexcept {
     if (!stats.enabled)
         return "Disabled";
     if (!stats.runtime_active)
-        return "Waiting for OpenVR or OpenXR";
+        return "Waiting for OpenVR, OpenXR or LibOVR";
     if (stats.unsupported_submission)
         return "Unsupported texture or queue path";
     if (stats.correction_active)
@@ -2140,6 +2140,8 @@ const char* eye_calibration_backend_name(EyeCalibrationBackend backend) noexcept
         return "OpenVR";
     case EyeCalibrationBackend::openxr:
         return "OpenXR";
+    case EyeCalibrationBackend::libovr:
+        return "LibOVR";
     default:
         return "Waiting for VR";
     }
@@ -2147,7 +2149,7 @@ const char* eye_calibration_backend_name(EyeCalibrationBackend backend) noexcept
 void eye_calibration_destroy_session(std::uint64_t generation) noexcept {
     auto& s = state();
     std::lock_guard lock(s.mutex);
-    if (s.backend != EyeCalibrationBackend::openxr || s.session_generation != generation)
+    if (!eye_calibration_frame_loop(s.backend) || s.session_generation != generation)
         return;
     ++s.epoch;
     clear_stereo_calibration();

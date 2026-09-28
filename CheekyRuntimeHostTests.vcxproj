@@ -11,5 +11,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ItemGroup><ProjectReference Include="CheekyFakeOpenVR.vcxproj"><Project>{A73087E1-1CD8-4313-AE49-8C0000000003}</Project><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference></ItemGroup>
   <ItemGroup><ProjectReference Include="CheekyFakeNGX.vcxproj"><Project>{A73087E1-1CD8-4313-AE49-8C0000000001}</Project><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference></ItemGroup>
+  <ItemGroup><ProjectReference Include="CheekyFakeLibOVR.vcxproj"><Project>{A73087E1-1CD8-4313-AE49-8C0000000004}</Project><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference></ItemGroup>
+  <ItemGroup><ProjectReference Include="CheekyFakePVR.vcxproj"><Project>{A73087E1-1CD8-4313-AE49-8C0000000005}</Project><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference></ItemGroup>
 
 </Project>

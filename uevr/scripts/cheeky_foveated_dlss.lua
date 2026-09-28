@@ -167,7 +167,7 @@ local function reset_group(label, group)
     end
     imgui.end_disabled()
 end
-local alignment = {[0]="Manual fallback", [1]="Streamline projection", [2]="OpenXR", [3]="OpenVR"}
+local alignment = {[0]="Manual fallback", [1]="Streamline projection", [2]="OpenXR", [3]="OpenVR", [4]="LibOVR"}
 
 local function performance(d, f)
     section("Frame rate comparison")

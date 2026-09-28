@@ -53,6 +53,7 @@ the desktop; an in-headset settings menu is not included.
 | OpenXR, including UEVR in OpenXR mode | **Required** |
 | OpenXR through SteamVR or OpenComposite | **Required** |
 | Native OpenVR/SteamVR, such as ACC in SteamVR mode | Not needed; calibration is built in |
+| Oculus LibOVR, such as R.E.A.L. VR with `PreferredAPI2=1` on Pimax | Not needed; calibration and Pimax gaze are built in |
 | Flat-screen play | Not needed |
 
 SteamVR's presence alone does not identify the game's API. OpenXR games still need the installer when SteamVR is their OpenXR runtime.
@@ -72,7 +73,7 @@ If calibration stays inactive or reports manual fallback, check the installed la
 
 Start with defaults, then compare native and foveated DLSS timings in the performance panel. Smaller foveas reduce processing cost; higher center supersampling improves center resolution at additional cost. Results depend on the game and GPU.
 
-- **Eye tracking:** select **Runtime gaze (OpenXR / OpenVR)** only with a compatible eye-tracked headset and runtime. Quest 3 users should use **Fixed** with automatic alignment.
+- **Eye tracking:** select **Runtime gaze (OpenXR / OpenVR / LibOVR)** only with a compatible eye-tracked headset and runtime. Quest 3 users should use **Fixed** with automatic alignment.
 - **DLSS-NR (DLSS5):** experimental and off by default. Compatible NVIDIA runtimes must be supplied separately. Read the [DLSS-NR instructions](USAGE.md#experimental-dlss-nr-support) before enabling it.
 - [Full settings reference](USAGE.md) · [Eye calibration details and limitations](EYE-CALIBRATION.md)
 
@@ -94,7 +95,10 @@ It requires an eye-tracked headset and a runtime that supplies usable gaze input
 Automatic stereo alignment works without eye tracking; Quest 3 users should use
 **Fixed** with **Automatic stereo alignment** and adjust **Height offset** as needed.
 
-To enable real tracking, select **Foveation center > Runtime gaze (OpenXR / OpenVR)**. For validation,
+LibOVR games on Pimax, including R.E.A.L. VR in LibOVR mode, read gaze from the
+game's own Pimax PVR session without OpenXR; see [LibOVR games and Pimax eye tracking](USAGE.md#libovr-games-and-pimax-eye-tracking).
+
+To enable real tracking, select **Foveation center > Runtime gaze (OpenXR / OpenVR / LibOVR)**. For validation,
 disable the game's built-in eye-tracked foveation, enable the red alignment border,
 and open **Diagnostics > OpenXR eye tracking**. Check **System support**, **Gaze
 action active**, **Tracking valid**, and **Using gaze**, along with stable, distinct

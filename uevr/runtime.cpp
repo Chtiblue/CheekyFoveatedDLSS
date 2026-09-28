@@ -14,6 +14,7 @@
 #include "eye_calibration.hpp"
 #include "gaze_foveation.hpp"
 #include "openvr_gaze.hpp"
+#include "libovr_gaze.hpp"
 #include "dlss_nr.hpp"
 #include "d3d12_ngx_dispatch.hpp"
 #include "afw_compatibility.hpp"
@@ -126,6 +127,7 @@ std::string snapshot_locked(State& s) {
         << ",\"effective_x_offset\":" << afw_coverage.x_offset << ",\"effective_height_offset\":" << afw_coverage.height_offset
         << ",\"effective_center_scale\":" << afw_coverage.center_scale << '}'
         << ",\"eye_calibration\":" << eye_calibration_json()
+        << ",\"libovr\":" << libovr_gaze_json()
         << ",\"support\":{\"busy\":" << s.report_busy.load() << ",\"zip\":\"" << json_escape(path_utf8(s.report_zip)) << "\"}"
         << ",\"gpu_timing\":{\"recorded\":" << gpu.recorded << ",\"submitted\":" << gpu.submitted
         << ",\"completed\":" << gpu.completed << ",\"published\":" << gpu.published

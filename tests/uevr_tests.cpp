@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
         command("1\n81\ncalibration_enable");
         command("1\n82\ncalibration_reset");
         command("1\n86\ncalibration_recalibrate");
-        require(received.find("Waiting for OpenVR or OpenXR") != received.npos, "Unavailable backend must not claim active calibration");
+        require(received.find("Waiting for OpenVR, OpenXR or LibOVR") != received.npos, "Unavailable backend must not claim active calibration");
         if (late) {
             const auto active_hook = higher_hook ? "\"d3d12_lower_hook_active\":false" : "\"d3d12_lower_hook_active\":true";
             require(snapshot(get).find(active_hook) != std::string::npos, "Saved hook path was not applied at startup");

@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -37,6 +38,120 @@ double field(const std::string& text, const char* name) {
     require(pos != std::string::npos, "Missing numeric field");
     return std::stod(text.substr(pos + token.size()));
 }
+// A LibOVR game on Pimax: the runtime (fixture) forwards sessions and frames
+// through an already loaded PVR client (fixture). Cheeky must observe both
+// without initializing either, and read gaze from the game's own PVR session.
+// Modes: 1 current SDK, 2 missed ovr_Initialize with pre-1.25 layers, 3 runtime
+// returning borrowed swap-chain image references, 4 runtime using its own copy
+// of the PVR interface table, 5 missed ovr_Initialize with 1.25+ layers.
+void verify_libovr(unsigned mode, HMODULE libovr, HMODULE pvr, CheekyRuntimeSnapshotFn get) {
+    const bool initialized = mode != 2 && mode != 5;
+    const auto state = [&] {
+        const auto text = snapshot(get);
+        const auto at = text.find("\"libovr\":");
+        require(at != std::string::npos, "LibOVR adapter diagnostics in snapshot");
+        return text.substr(at);
+    };
+    for (unsigned i = 0; i < 200 && !contains(state(), "\"client\":true"); ++i) Sleep(25);
+    require(contains(state(), "\"hooked\":true") && contains(state(), "\"client\":true"),
+        "Loaded LibOVR runtime and PVR client observed by their exports");
+    require(contains(state(), "\"interface_minor\":32"), "Newest verified PVR interface selected");
+    ComPtr<ID3D11Device> device;
+    require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &device, nullptr, nullptr)), "Create WARP D3D11 device");
+    using Initialize = int (*)(const void*);
+    using Create = int (*)(void**, void*);
+    using Destroy = void (*)(void*);
+    using CreateChain = int (*)(void*, IUnknown*, const void*, void**);
+    using DestroyChain = void (*)(void*, void*);
+    using Commit = int (*)(void*, void*);
+    using EndFrame = int (*)(void*, long long, const void*, const void* const*, unsigned);
+    using References = unsigned long (*)(void*, int);
+    if (mode == 3) proc<void(*)(bool)>(libovr, "CheekyFakeLibOVR_SetBorrowedBuffers")(true);
+    if (initialized) {
+        const std::uint32_t params[8]{4U /* ovrInit_RequestVersion */, 43U};
+        require(proc<Initialize>(libovr, "ovr_Initialize")(params) == 0, "Initialize LibOVR");
+    }
+    void* session{};
+    require(proc<Create>(libovr, "ovr_Create")(&session, nullptr) == 0 && session, "Create LibOVR session");
+    const unsigned size[2]{256, 256};
+    std::array<void*, 2> chains{};
+    for (auto& chain : chains)
+        require(proc<CreateChain>(libovr, "ovr_CreateTextureSwapChainDX")(session, device.Get(), size, &chain) == 0,
+            "Create LibOVR D3D11 swap chain");
+    // ovrLayerEyeFov: ColorTexture, Viewport, Fov after a 136-byte header
+    // (SDK 1.25+) or an 8-byte header (older clients).
+    alignas(8) std::array<unsigned char, 320> layer{};
+    const std::size_t header = mode == 2 ? 8 : 136;
+    const std::int32_t type = 1;
+    std::memcpy(layer.data(), &type, sizeof(type));
+    std::memcpy(layer.data() + header, chains.data(), sizeof(void*) * 2);
+    const std::int32_t viewports[8]{0, 0, 256, 256, 0, 0, 256, 256};
+    std::memcpy(layer.data() + header + 16, viewports, sizeof(viewports));
+    const float fovs[8]{1, 1, 1, 1, 1, 1, 1, 1};
+    std::memcpy(layer.data() + header + 48, fovs, sizeof(fovs));
+    // RenderPose[2]: orientation xyzw, position xyz (identity rotations).
+    const float poses[14]{0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
+    std::memcpy(layer.data() + header + 80, poses, sizeof(poses));
+    const void* layers[]{layer.data()};
+    const auto commit = proc<Commit>(libovr, "ovr_CommitTextureSwapChain");
+    const auto end_frame = proc<EndFrame>(libovr, mode == 1 ? "ovr_EndFrame" : "ovr_SubmitFrame2");
+    const auto frames = [&](unsigned count) {
+        for (unsigned i = 0; i < count; ++i) {
+            for (auto* chain : chains) require(commit(session, chain) == 0, "Commit LibOVR swap chain");
+            require(end_frame(session, i, nullptr, layers, 1) == 0, "Submit LibOVR frame");
+            Sleep(2);
+        }
+    };
+    frames(60);
+    if (mode == 4) {
+        // Table patches are never called: after ~1 s of frames, the adapter
+        // observes the implementations instead.
+        require(contains(state(), "\"session_captured\":false"), "Copied table hides the session from slot patches");
+        frames(40);
+        for (unsigned i = 0; i < 100 && !contains(state(), "\"session_route\":\"implementation\""); ++i) frames(5);
+    }
+    auto text = state();
+    require(contains(text, mode == 4 ? "\"session_route\":\"implementation\"" : "\"session_route\":\"table\""),
+        "Game PVR session found through the expected route");
+    require(contains(text, "\"session\":true") && contains(text, "\"projection_layers\":1") &&
+        contains(text, "\"submission_api\":11") && field(text, "projection_frames") >= 50,
+        "Stereo projection and D3D11 swap-chain images observed");
+    require(contains(text, mode == 2 ? "\"layout\":\"legacy\"" : "\"layout\":\"current\""),
+        "Layer header layout follows the client's SDK version");
+    require(contains(text, initialized ? "\"requested_minor\":43" : "\"requested_minor\":null"),
+        "Requested LibOVR minor version recorded only when observed");
+    require(proc<bool(*)()>(pvr, "CheekyFakePVR_EndFrameObserved")() &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_EndFrames")() == proc<unsigned(*)()>(libovr, "CheekyFakeLibOVR_Frames")(),
+        "Patched PVR frame slot forwards every call");
+    require(contains(text, "\"submitted_eye_rotation\":true"), "Eye rotations come from submitted render poses");
+    require(contains(text, "\"session_captured\":true") &&
+        contains(text, "\"gaze_valid\":true") && contains(text, "\"gaze_tan\":[0.2,-0.1]") &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_EyeQueries")() > 0,
+        "Gaze read from the game's own PVR session");
+    const auto full = snapshot(get);
+    const auto calibration = full.substr(full.find("\"eye_calibration\":"));
+    require(contains(calibration, "\"backend\":\"LibOVR\"") && field(calibration, "frames") >= 50,
+        "LibOVR frames drive eye calibration");
+    proc<void(*)(float, float, bool)>(pvr, "CheekyFakePVR_SetGaze")(0, 0, false);
+    frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "PVR samples without a timestamp are invalid");
+    proc<void(*)(float, float, bool)>(pvr, "CheekyFakePVR_SetGaze")(0.2F, -0.1F, true);
+    const auto references = proc<References>(libovr, "CheekyFakeLibOVR_References");
+    for (auto* chain : chains)
+        for (int index = 0; index < 3; ++index)
+            require(references(chain, index) <= 4, "Swap-chain image references stay bounded");
+    proc<Destroy>(libovr, "ovr_Destroy")(session);
+    for (auto* chain : chains)
+        for (int index = 0; index < 3; ++index)
+            require(references(chain, index) == 1, "Ending the session returns every swap-chain image reference");
+    text = state();
+    require(contains(text, "\"session\":false") && contains(text, "\"session_captured\":false") &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_Destroyed")() == 1, "Session end forgets the game's PVR session");
+    for (auto* chain : chains) proc<DestroyChain>(libovr, "ovr_DestroyTextureSwapChain")(session, chain);
+    proc<void(*)()>(libovr, "ovr_Shutdown")();
+}
+
 void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn get,
     std::uint64_t attachment, ID3D11Device* device, ID3D11DeviceContext* context, HMODULE ngx,
     const std::filesystem::path& log_path,bool depth24=false,bool backpressure=false,bool init_failure=false, const std::filesystem::path& game_feature_directory={}) {
@@ -313,10 +428,15 @@ int main(int argc, char** argv) {
     try {
         bool ota_transport{}, ota_only{};
         bool dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
-        unsigned openvr_version{};
+        unsigned openvr_version{}, libovr_mode{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--dx11") dx11 = true;
+            else if (arg == "--libovr") libovr_mode = 1;
+            else if (arg == "--libovr-legacy") libovr_mode = 2;
+            else if (arg == "--libovr-borrowed") libovr_mode = 3;
+            else if (arg == "--libovr-copied-table") libovr_mode = 4;
+            else if (arg == "--libovr-late") libovr_mode = 5;
             else if (arg == "--conflict") conflict = true;
             else if (arg == "--optiscaler") optiscaler = true;
             else if (arg == "--transport-ota-only") { ota_only = ota_transport = transport = dx11 = true; }
@@ -361,6 +481,14 @@ int main(int argc, char** argv) {
             require(cached_compositor && !error, "Native host caches compositor before Cheeky loads");
             original_wait = (*static_cast<void***>(cached_compositor))[2];
             set_openvr_initialized(false);
+        }
+        HMODULE fake_pvr{}, fake_libovr{};
+        if (libovr_mode) {
+            // The game's runtime loaded both before Cheeky; Cheeky loads neither.
+            fake_pvr = LoadLibraryW((bin / "test-fixtures" / "LibPVRClient64.dll").c_str());
+            fake_libovr = LoadLibraryW((bin / "test-fixtures" / "LibOVRRT64_1.dll").c_str());
+            require(fake_pvr && fake_libovr, "Load LibOVR runtime and PVR client fixtures");
+            if (libovr_mode == 4) proc<void(*)()>(fake_libovr, "CheekyFakeLibOVR_CopyPvrTable")();
         }
         HANDLE other_owner{};
         if (conflict) {
@@ -427,6 +555,16 @@ int main(int argc, char** argv) {
             return 0;
         }
         require(start(&input) && attachment != 0, "Start before graphics discovery");
+        if (libovr_mode) {
+            verify_libovr(libovr_mode, fake_libovr, fake_pvr, get);
+            detach(attachment);
+            puts(libovr_mode == 1 ? "PASS: LibOVR frames and Pimax PVR gaze observed without OpenXR" :
+                libovr_mode == 2 ? "PASS: LibOVR legacy layer header detected after a missed ovr_Initialize" :
+                libovr_mode == 3 ? "PASS: LibOVR borrowed swap-chain references are never released" :
+                libovr_mode == 4 ? "PASS: PVR session found through implementations when the table is copied" :
+                "PASS: LibOVR current layer header detected after a missed ovr_Initialize");
+            return 0;
+        }
         if (openvr_version) {
             const auto queries_before = openvr_queries();
             // A nonzero generation token persists after shutdown. It must not

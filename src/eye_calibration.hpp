@@ -7,7 +7,12 @@
 #include "eye_calibration_policy.hpp"
 namespace cheeky::foveated_dlss {
 inline constexpr unsigned eye_calibration_failure_limit = 20;
-enum class EyeCalibrationBackend { none, openvr, openxr };
+// LibOVR follows OpenXR's frame-loop policy: commit is its image release and
+// ovr_EndFrame closes the interval, including alternating-eye hosts.
+enum class EyeCalibrationBackend { none, openvr, openxr, libovr };
+[[nodiscard]] constexpr bool eye_calibration_frame_loop(EyeCalibrationBackend backend) noexcept {
+    return backend == EyeCalibrationBackend::openxr || backend == EyeCalibrationBackend::libovr;
+}
 // Asynchronous D3D11/D3D12 calibration, plus Vulkan sources transferred to
 // D3D11 OpenXR submissions. D3D11 work
 // uses the render thread except protected native OpenXR pre-release copies;

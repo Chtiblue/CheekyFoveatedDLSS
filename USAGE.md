@@ -33,7 +33,7 @@ The main controls and their defaults are:
 | Transition width | `0.040` | Feathers the edge of the region. |
 | Show 5 px red alignment border | Off | Displays the processed region while calibrating the fovea. |
 | DX11 game processing path | DX11 Direct | **DX12 Transport** enables DX12-only features for DX11 games. |
-| Foveation center | Fixed | Selects fixed placement, runtime gaze (OpenXR / OpenVR), or simulated gaze. |
+| Foveation center | Fixed | Selects fixed placement, runtime gaze (OpenXR / OpenVR / LibOVR), or simulated gaze. |
 | Gaze smoothing | `20 ms` | Sets the time constant for gaze motion. |
 | Crop origin quantization | `8 px` | Snaps motion to render-pixel increments. |
 | Jump reset threshold | `0.125 crop` | Resets DLSS history above the larger of 64 px or 12.5% of the crop dimension. |
@@ -102,7 +102,7 @@ It requires an eye-tracked headset and a runtime that supplies usable gaze input
 Automatic stereo alignment works without eye tracking; Quest 3 users should use
 **Fixed** with **Automatic stereo alignment** and adjust **Height offset** as needed.
 
-To enable real tracking, select **Foveation center > Runtime gaze (OpenXR / OpenVR)**. For validation,
+To enable real tracking, select **Foveation center > Runtime gaze (OpenXR / OpenVR / LibOVR)**. For validation,
 disable the game's built-in eye-tracked foveation, enable the red alignment border,
 and open **Diagnostics > OpenXR eye tracking**. Check **System support**, **Gaze
 action active**, **Tracking valid**, and **Using gaze**, along with stable, distinct
@@ -232,6 +232,34 @@ runtime focus or eye-tracking permissions.
 This change requires updating the installed **OpenXR layer**, as well as the game
 runtime. Close VR applications and run the matching OpenXR setup included in the
 RealVR gaze test package; replacing only the game's DLLs will not update the layer.
+
+### LibOVR games and Pimax eye tracking
+
+Games and mods that use the Oculus PC SDK (LibOVR) are observed in-process, with
+no OpenXR involvement. This includes R.E.A.L. VR in its LibOVR mode
+(`PreferredAPI2=1`) on a Pimax headset, where Pimax Play's Oculus compatibility
+runtime serves LibOVR. The OpenXR layer is not used for these games, and the mod
+does not need to switch to OpenXR.
+
+Cheeky finds the LibOVR runtime the game already loaded by its exports and
+observes swap-chain commits and `ovr_EndFrame`/`ovr_SubmitFrame`: the submitted
+eye images, viewports, FOVs and render poses drive automatic stereo alignment and
+eye calibration, as with OpenXR. On Pimax, gaze comes from Pimax's PVR client that
+the compatibility runtime has already loaded: Cheeky reads eye tracking from the
+game's own PVR session. It never loads or initializes a VR runtime and never
+creates a second session. The combined gaze of both eyes is projected into each
+submitted eye view, as Pimax's OpenXR eye gaze interaction reports it.
+
+Enable and calibrate eye tracking in Pimax Play first. Then check **Diagnostics >
+Eye tracking details > LibOVR runtime** in the F8 menu: **Game PVR session found**
+and **Eye tracker supplying gaze** should both read Yes, even with **Fixed**
+placement selected. Eye calibration reports the **LibOVR** backend.
+
+Limits: eye calibration supports D3D11 LibOVR swap chains; D3D12 LibOVR games get
+gaze and alignment, but calibration reports an unsupported submission. The
+Oculus runtime itself (for example Quest through Link) exposes no eye tracking to
+LibOVR; such games get alignment and calibration only. A PVR client that is not
+already loaded by the game's runtime is never used.
 
 ### Direct3D 12 Ray Reconstruction
 

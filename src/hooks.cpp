@@ -19,6 +19,7 @@
 #include "diagnostics.hpp"
 #include "gaze_foveation.hpp"
 #include "openvr_gaze.hpp"
+#include "libovr_gaze.hpp"
 #include "crop_motion.hpp"
 #include "ngx_abi.hpp"
 #include "ngx_evaluation_extent.hpp"
@@ -6568,6 +6569,7 @@ DWORD WINAPI interception_worker(void*) noexcept {
            WaitForSingleObject(event, 250U) == WAIT_TIMEOUT) {
         drain_hook_debug_loader_events();
         poll_openvr_hooks();
+        poll_libovr_hooks();
         if (worker_tick < 20U) trace_event("HOOKDBG worker tick=%u begin tid=%lu", worker_tick, static_cast<unsigned long>(GetCurrentThreadId()));
         if (streamline_loaded()) {
             if (!streamline_inline_mode.load(std::memory_order_acquire) &&
@@ -6787,6 +6789,7 @@ void stop_interception() noexcept {
     }
     if (event != nullptr) CloseHandle(event);
     stop_openvr_hooks();
+    stop_libovr_hooks();
     restore_streamline_options();
     if (streamline_hook_lock_ready.load(std::memory_order_acquire)) {
         uninstall_streamline_inline_hooks();

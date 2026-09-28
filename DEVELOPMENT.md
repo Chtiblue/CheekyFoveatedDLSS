@@ -47,6 +47,15 @@ Lua tests require `lupa==2.8`, installed in the Python environment or `build/tes
 
 GPU and host tests complement game/headset testing; they do not establish compatibility or performance in every game.
 
+`CheekyRuntimeHostTests --libovr` (also `--libovr-legacy`, `--libovr-late`,
+`--libovr-borrowed` and `--libovr-copied-table`) loads synthetic
+`LibOVRRT64_1.dll` and `LibPVRClient64.dll` fixtures before the runtime, as a
+LibOVR game on Pimax would. They cover export discovery, both layer header
+layouts, a missed `ovr_Initialize`, swap-chain reference ownership, PVR session
+capture through the interface table or its implementations, gaze sampling and
+LibOVR-driven calibration frames. They do not validate Pimax hardware, Pimax
+Play's compatibility runtime or R.E.A.L. VR.
+
 ## Packaging
 
 ```powershell

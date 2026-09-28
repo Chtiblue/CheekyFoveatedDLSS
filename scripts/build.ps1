@@ -121,6 +121,12 @@ foreach ($mode in @('native','native-c','streamline','missing-lower','public-fir
     & $standaloneHostTest "realvr-$mode" standalone
     if ($LASTEXITCODE -ne 0) { throw "R.E.A.L. VR standalone routing failed: $mode" }
 }
+foreach ($mode in @('libovr','libovr-legacy','libovr-late','libovr-borrowed','libovr-copied-table')) {
+    & $runtimeHostTest "--$mode"
+    if ($LASTEXITCODE -ne 0) { throw "Standalone LibOVR/Pimax PVR gaze failed: $mode" }
+    & $runtimeHostTest --optiscaler "--$mode"
+    if ($LASTEXITCODE -ne 0) { throw "OptiScaler LibOVR/Pimax PVR gaze failed: $mode" }
+}
 foreach ($abi in @('022','027','028','029')) {
     & $runtimeHostTest "--openvr-late-$abi"
     if ($LASTEXITCODE -ne 0) { throw "Standalone cached OpenVR compositor failed: $abi" }
