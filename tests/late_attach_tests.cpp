@@ -148,6 +148,44 @@ struct Fixture {
     }
 };
 Fixture& fixture() { static auto* f=new Fixture; return *f; }
+
+// BG3 reuses its NGX bag for a flat-window optimal-settings query, leaving a
+// small OutWidth/OutHeight on every later evaluation. Native DLSS keeps the
+// created output, so the foveated DX11 composite must cover all of it too.
+void verify_d3d11_reused_output_extent(void (*command)(const char*)) {
+    auto& f=fixture();
+    if(!f.context || f.use_sl) return;
+    command("1\n160\nset\nEnabled=true\nD3D11D3D12Transport=false\nPeripheralDlaa=false\nNrEnabled=false\nAutoStereoAlignment=false\nCenterMode=0\nAlignmentBorder=false\nWidth=0.35\nHeight=0.4\nXOffset=0\nHeightOffset=0");
+    ComPtr<ID3D11Device> device; f.context->GetDevice(&device);
+    const auto clear=[&](ID3D11Texture2D* texture,float value) {
+        ComPtr<ID3D11UnorderedAccessView> view;
+        check(device->CreateUnorderedAccessView(texture,nullptr,&view),"Extent clear view");
+        const float rgba[]{value,value,value,value};
+        f.context->ClearUnorderedAccessViewFloat(view.Get(),rgba);
+    };
+    clear(f.textures11[0].Get(),1.F);
+    clear(f.textures11[3].Get(),.25F); // Stale content from an earlier frame.
+    f.params.Set("OutWidth",96U); f.params.Set("OutHeight",96U); // Below the 128 render size, as in BG3.
+    require(ngx_succeeded(f.evaluate()),"Evaluate after a reused optimal-settings query"); f.finish_gpu();
+    require(get_ui(&f.params,"Width")==128 && get_ui(&f.params,"Height")==128 &&
+        get_ui(&f.params,"OutWidth")==96 && get_ui(&f.params,"OutHeight")==96,
+        "Reused query values must be restored for the game");
+    D3D11_TEXTURE2D_DESC desc{}; f.textures11[3]->GetDesc(&desc);
+    desc.Usage=D3D11_USAGE_STAGING; desc.BindFlags=0; desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ; desc.MiscFlags=0;
+    ComPtr<ID3D11Texture2D> staging; check(device->CreateTexture2D(&desc,nullptr,&staging),"Extent readback");
+    f.context->CopyResource(staging.Get(),f.textures11[3].Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{}; check(f.context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Map extent readback");
+    unsigned stale{};
+    for(unsigned y=0;y<desc.Height;++y) for(unsigned x=0;x<desc.Width;++x) {
+        const auto* rgba=reinterpret_cast<const unsigned short*>(static_cast<const unsigned char*>(mapped.pData)+y*mapped.RowPitch+x*8);
+        stale+=rgba[0]==0x3400 && rgba[1]==0x3400 && rgba[2]==0x3400 && rgba[3]==0x3400;
+    }
+    f.context->Unmap(staging.Get(),0);
+    f.params.Set("OutWidth",256U); f.params.Set("OutHeight",256U);
+    if(stale) printf("Stale DX11 output pixels after reused query: %u\n",stale);
+    require(stale==0,"A reused OutWidth must not shrink the DX11 composite to one corner");
+    puts("DX11 reused optimal-settings extent: created output composited and query values restored");
+}
 HMODULE afw_core{};
 HMODULE afw_warp_module{};
 void (__stdcall* afw_cached_warp)(void*){};
@@ -1363,6 +1401,7 @@ void verify_late_attach_test(CheekyUEVRSnapshotFn get, void (*command)(const cha
         else proc<void(*)(Evaluate12,const NgxHandle*,NgxParameters*)>(f.sl,"CheekyFakeConfigure")(f.evaluate12,f.handle,&f.params);
     }
     require(ngx_succeeded(f.evaluate()),"Evaluate recreated game feature"); f.finish_gpu();
+    verify_d3d11_reused_output_extent(command);
     verify_nr_reset_isolation(command, snapshot(get).find("\"d3d12_lower_hook_active\":true") != std::string::npos);
     if (!f.context && !f.use_sl) {
         command("1\n70\nset\nEnabled=false");

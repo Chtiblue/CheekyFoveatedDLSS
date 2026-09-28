@@ -84,6 +84,7 @@ struct FeatureState {
     D3D11CreateFeatureFn create_feature{};
     D3D11ReleaseFeatureFn release_feature{};
     NgxHandle* private_handle{};
+    NgxOutputExtent output{};
     PrivateFeatureKey private_key{};
     CropGeometry last_crop{};
     bool has_private_key{};
@@ -628,21 +629,29 @@ extern "C" void register_d3d11_game_feature(
     const std::uint32_t feature,
     D3D11CreateFeatureFn const create_feature,
     D3D11ReleaseFeatureFn const release_feature,
+    const NgxOutputExtent output,
     const bool preserve_existing
 ) noexcept {
     if (game_handle == nullptr || create_feature == nullptr) {
         return;
     }
 
+    const bool output_valid = output.width != 0U && output.height != 0U;
     std::lock_guard lock(features_mutex);
     if (auto* const existing = find_feature_state_locked(game_handle);
         existing != nullptr) {
-        if (preserve_existing) return;
+        if (preserve_existing) {
+            if (existing->output.width == 0U && output_valid) {
+                existing->output = output;
+            }
+            return;
+        }
         existing->feature = feature;
         existing->create_feature = create_feature;
         if (release_feature != nullptr) {
             existing->release_feature = release_feature;
         }
+        if (output_valid) existing->output = output;
         return;
     }
 
@@ -651,7 +660,16 @@ extern "C" void register_d3d11_game_feature(
     state.feature = feature;
     state.create_feature = create_feature;
     state.release_feature = release_feature;
+    if (output_valid) state.output = output;
     feature_states.push_back(state);
+}
+
+NgxOutputExtent d3d11_game_output_extent(
+    const NgxHandle* const game_handle
+) noexcept {
+    std::lock_guard lock(features_mutex);
+    const auto* const state = find_feature_state_locked(game_handle);
+    return state == nullptr ? NgxOutputExtent{} : state->output;
 }
 
 // Preserve the callback pair captured during CreateFeature. Late adoption may
