@@ -2,6 +2,7 @@
 #include "eye_calibration_d3d12.hpp"
 #include "settings.hpp"
 #include "../openxr_layer/eye_calibration.hpp"
+#include "libovr_calibration.hpp"
 #include <wrl/client.h>
 #include <dxgi1_4.h>
 #include <d3dcompiler.h>
@@ -1853,7 +1854,83 @@ void retained_calibration(bool source12, bool submit11, EyeCalibrationBackend ba
     std::cout << "PASS retained calibration " << (source12 ? "DX12" : "DX11") << " -> " <<
         (submit11 ? "DX11 " : "DX12 ") << eye_calibration_backend_name(backend) << '\n';
 }
+// R.E.A.L. VR's legacy AER over LibOVR: every frame renders and commits one
+// eye, and ovr_EndFrame resubmits the other eye's previous image.
+void libovr_alternating_commits() {
+    roles();
+    auto settings = configured_settings();
+    settings.eye_calibration_continuous = false;
+    settings.eye_calibration_method = EyeCalibrationMethod::full;
+    update_settings(settings);
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context;
+    check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &device, nullptr, &context));
+    constexpr unsigned size = 512;
+    const std::vector<unsigned> background(size * size, 0xff404040);
+    D3D11_TEXTURE2D_DESC desc{size, size, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM,
+        {1, 0}, D3D11_USAGE_DEFAULT, 0, 0, 0};
+    std::array<ComPtr<ID3D11Texture2D>, 2> sources, images;
+    for (auto& texture : sources) check(device->CreateTexture2D(&desc, nullptr, &texture));
+    for (auto& texture : images) check(device->CreateTexture2D(&desc, nullptr, &texture));
+    const std::array<std::uint64_t, 2> views{9101, 9102}, chains{0x5101, 0x5102};
+    constexpr std::uint64_t session = 9901;
+    CheekyEyeCalibrationBridgeV1 api;
+    api.begin = [](std::uint64_t gen, std::uint32_t graphics) noexcept {
+        return eye_calibration_frame(EyeCalibrationBackend::libovr, gen, graphics);
+    };
+    api.capture = [](std::uint64_t gen, void* texture, void*, std::uint32_t, std::uint32_t eye,
+                     std::uint32_t slice, float u0, float v0, float u1, float v1) noexcept {
+        return eye_calibration_submit(static_cast<ID3D11Texture2D*>(texture), eye, u0, v0, u1, v1, slice,
+                                      EyeCalibrationBackend::libovr, gen);
+    };
+    api.result = eye_calibration_result;
+    api.destroy = eye_calibration_destroy_session;
+    std::array<cheeky::openxr_calibration::Region, 2> regions{};
+    for (unsigned eye = 0; eye < 2; ++eye) regions[eye] = {chains[eye], 0, 0, 0, int(size), int(size)};
+    cheeky::openxr_calibration::Frame frame;
+    bool deferred{};
+    unsigned deferrals{}, frames{};
+    const auto run = [&](bool pair_eyes) {
+        const unsigned eye = frames++ & 1U;
+        context->UpdateSubresource(sources[eye].Get(), 0, nullptr, background.data(), size * 4, 0);
+        eye_calibration_stamp(context.Get(), sources[eye].Get(), views[eye], 0, 0, size, size);
+        context->CopyResource(images[eye].Get(), sources[eye].Get());
+        frame.before_release(&api, chains[eye], 0, images[eye].Get(), nullptr, size, size);
+        frame.after_release(chains[eye], 0, true);
+        if (pair_eyes && libovr_await_second_eye(frame, true, deferred)) {
+            deferred = true; ++deferrals;
+        } else {
+            deferred = false;
+            frame.end(&api, regions, std::array<std::uint32_t, 2>{}, true);
+            frame.begin(&api, session, 11);
+        }
+        context->Flush();
+        Sleep(2); eye_calibration_tick();
+    };
+    for (unsigned i = 0; i < 150; ++i) run(false);
+    require(!eye_calibration_stats().crop_mapping_active && !deferrals,
+        "Closing each LibOVR frame never pairs legacy AER commits");
+    const auto deadline = GetTickCount64() + 10000;
+    do run(true); while (!eye_calibration_stats().crop_mapping_active && GetTickCount64() < deadline);
+    require(eye_calibration_stats().crop_mapping_active && deferrals > 0 &&
+        stereo_eye_assignment(views[0]).calibrated && stereo_eye_assignment(views[0]).eye_index == 0 &&
+        stereo_eye_assignment(views[1]).calibrated && stereo_eye_assignment(views[1]).eye_index == 1,
+        "Legacy AER calibrates when commits are paired across two LibOVR frames");
+    frame.destroy(&api);
+    settings.eye_calibration_continuous = true; update_settings(settings);
+    cleanup();
+    std::cout << "PASS LibOVR legacy AER: alternating eye commits paired across frames\n";
+}
 } // namespace
+int run_libovr_alternating_calibration_tests() {
+    try { libovr_alternating_commits(); return 0; }
+    catch (const std::exception& e) {
+        std::cerr << "LibOVR legacy AER calibration: " << e.what() << '\n'; cleanup();
+        auto settings = configured_settings(); settings.eye_calibration_continuous = true; update_settings(settings);
+        return 1;
+    }
+}
 int run_retained_calibration_tests() {
     try {
         for (const auto backend : {EyeCalibrationBackend::openvr, EyeCalibrationBackend::openxr}) {

@@ -2663,6 +2663,8 @@ int main(int argc, char** argv) {
         return failures ? 1 : 0;
     }
     extern int run_retained_calibration_tests();
+    extern int run_libovr_alternating_calibration_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--libovr-aer-calibration") == 0) return run_libovr_alternating_calibration_tests();
     extern int run_libovr_transfer_tests();
     if (argc == 2 && std::strcmp(argv[1], "--libovr-transfer") == 0) return run_libovr_transfer_tests();
     extern int run_calibration_modes_tests(bool incomplete_only = false);
@@ -2773,6 +2775,7 @@ int main(int argc, char** argv) {
     failures += run_debug_exposure_tests();
     failures += run_eye_calibration_tests();
     failures += run_retained_calibration_tests();
+    failures += run_libovr_alternating_calibration_tests();
     failures += run_crop_calibration12_tests();
     failures += run_stereo_support_tests();
     failures += run_stereo_support12_tests();

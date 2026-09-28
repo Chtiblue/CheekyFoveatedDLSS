@@ -76,7 +76,9 @@ LibOVR game on Pimax would. They cover export discovery, both layer header
 layouts, a missed `ovr_Initialize`, swap-chain reference ownership, PVR session
 capture through the interface table or its implementations, gaze sampling and
 LibOVR-driven calibration frames. They do not validate Pimax hardware, Pimax
-Play's compatibility runtime or R.E.A.L. VR.
+Play's compatibility runtime or R.E.A.L. VR. `CheekyTests --libovr-aer-calibration`
+commits one eye per LibOVR frame, as R.E.A.L. VR's legacy AER does, and checks
+that calibration pairs the commits across frames.
 
 ## Packaging
 

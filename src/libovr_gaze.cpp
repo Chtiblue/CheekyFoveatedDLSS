@@ -5,6 +5,7 @@
 #include "eye_calibration.hpp"
 #include "eye_calibration_bridge.h"
 #include "../openxr_layer/eye_calibration.hpp"
+#include "libovr_calibration.hpp"
 #include "openvr_vtable_hook.hpp"
 #include "gaze_math.hpp"
 #include "runtime.hpp"
@@ -132,6 +133,8 @@ unsigned projection_layers{}, submission_api{};
 
 std::mutex calibration_mutex;
 openxr_calibration::Frame calibration;  // calibration_mutex
+bool calibration_deferred{};             // calibration_mutex
+std::atomic<std::uint64_t> calibration_deferrals{};
 
 std::uint64_t qpc() noexcept { LARGE_INTEGER value{}; QueryPerformanceCounter(&value); return static_cast<std::uint64_t>(value.QuadPart); }
 std::uint64_t qpc_frequency() noexcept { LARGE_INTEGER value{}; QueryPerformanceFrequency(&value); return static_cast<std::uint64_t>(value.QuadPart); }
@@ -435,6 +438,12 @@ void publish_frame(ovr::Session value, const LibOVRProjection& projection, ovr::
             released[eye] = static_cast<std::uint32_t>(indices[eye]);
         }
     }
+    if (libovr_await_second_eye(calibration, usable, calibration_deferred)) {
+        calibration_deferred = true;
+        if (calibration_deferrals++ == 0) trace_event("LibOVR calibration pairs alternating eye commits across frames");
+        return;
+    }
+    calibration_deferred = false;
     calibration.end(calibration_bridge(), regions, released, usable);
     // Arm the next interval only when this frame showed a capturable D3D11
     // projection; otherwise sources would be stamped with nothing to read back.
@@ -970,6 +979,7 @@ std::string libovr_gaze_json() {
             << ",\"projection_frames\":" << projection_frames << ",\"projection_layers\":" << projection_layers
             << ",\"submission_api\":" << submission_api << ",\"submitted_eye_rotation\":" << submitted_rotation;
     }
+    out << ",\"calibration_pair_deferrals\":" << calibration_deferrals.load();
     out << ",\"pvr\":{\"client\":" << sample.attached << ",\"interface_minor\":" << (sample.attached ? pvr_client.minor : 0)
         << ",\"session_captured\":" << sample.session << ",\"session_route\":\""
         << (capture_route.load() == 1 ? "table" : capture_route.load() == 2 ? "implementation" : "none")

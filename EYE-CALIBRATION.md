@@ -73,8 +73,11 @@ LibOVR (Oculus PC SDK, including Pimax's compatibility runtime) follows the
 native OpenXR D3D11 policy, including alternating-eye hosts: a swap-chain commit
 is the image release where patches are captured, and `ovr_EndFrame` (or
 `ovr_SubmitFrame`) closes the interval with the first stereo EyeFov-family
-layer. It is built into the add-on, plugin and standalone runtime; no layer is
-installed. Layers with a bottom-left texture origin are not used.
+layer. When a frame commits only one eye and resubmits the other eye's previous
+image (R.E.A.L. VR's legacy AER), the interval stays open for one more frame so
+the other eye's commit completes the pair. It is built into the add-on, plugin
+and standalone runtime; no layer is installed. Layers with a bottom-left
+texture origin are not used.
 
 The LibOVR column describes the submitted swap-chain API. D3D12-rendered
 sources transferred into D3D11 LibOVR swap chains use the existing mixed-API
