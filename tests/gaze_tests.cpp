@@ -2645,6 +2645,8 @@ int run_vulkan_tests(bool real=false, bool integration=false);
 int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
 int main(int argc, char** argv) {
+    extern int run_calibration_search_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--calibration-search") == 0) return run_calibration_search_tests();
     if (argc == 2 && std::strcmp(argv[1], "--libovr-policy") == 0) {
         test_libovr_geometry(); test_native_gaze_selection(); test_libovr_coordinator();
         test_libovr_calibration_ownership();

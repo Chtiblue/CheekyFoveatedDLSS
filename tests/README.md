@@ -22,12 +22,18 @@ file. Logging is best effort if the temporary directory cannot be written.
 
 `CheekyTests.exe --retained-calibration` tests the optional change-only policy
 with actual WARP rendering on DX11/OpenVR, DX11/OpenXR, DX12/OpenVR, DX12/OpenXR,
-and DX12-to-DX11/OpenXR. It reads source pixels to verify all markers stop after
+DX12-to-DX11/OpenXR, DX11/LibOVR, and DX12-to-DX11/LibOVR. It reads source pixels to verify all markers stop after
 acquisition, waits beyond the crop timeout, and checks manual reacquisition,
 same-view eye swaps, source dimensions, submission bounds, recreated/new views,
 session changes, diagnostic resets, and resuming continuous validation.
 Native DX12 manual reacquisition switches to alternating source-eye renders while
 submitting both eyes each interval, covering recalibration after AFW starts.
+
+`CheekyTests.exe --calibration-search` checks refined grid locator scale against
+the complete white/black rings. It reproduces a partial-code fit that falsely
+resembled a vertical reflection, accepts real reflected grids, and rejects
+conflicting authentic source identities or orientations. It runs in the build
+script, the standard suite, and CTest as `CheekyCalibrationSearch`.
 
 `CheekyTests.exe --crop-calibration` exercises the production DX11, DX12 and
 DX12-to-DX11 stamp/read paths on WARP. `--crop-calibration-dx12` isolates the

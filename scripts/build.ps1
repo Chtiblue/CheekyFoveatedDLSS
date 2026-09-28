@@ -72,6 +72,8 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
+& $testExecutable --calibration-search
+if ($LASTEXITCODE -ne 0) { throw "Calibration locator scale and ambiguity regressions failed." }
 & $testExecutable --libovr-policy
 if ($LASTEXITCODE -ne 0) { throw "LibOVR source arbitration and calibration ownership tests failed." }
 & $testExecutable --libovr-transfer

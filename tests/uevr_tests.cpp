@@ -439,8 +439,8 @@ int main(int argc, char** argv) {
         require(snapshot(get).find("\"ready\":true")!=std::string::npos,"Renderer recovery");
         command("1\n2\nset\nWidth=0.65\nHeight=0.45\nEnabled=false\nEyeCalibrationContinuous=false");
         require(received.find("\"EyeCalibrationContinuous\":false") != received.npos &&
-            received.find("\"continuous_validation\":false") != received.npos,
-            "Calibration policy must reach the shared runtime");
+            received.find("\"continuous_validation\":true") != received.npos,
+            "Auto corner calibration must keep validating while the full-search retention preference is disabled");
         require(std::abs(field(received,"Width")-0.65)<0.0001 && received.find("\"Enabled\":false") != received.npos, "Settings bridge transaction");
         const auto revision=field(received,"revision");
         command("1\n3\nset\nWidth=0.4\nHeight=nan");

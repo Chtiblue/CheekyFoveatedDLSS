@@ -51,17 +51,23 @@ GPU and host tests complement game/headset testing; they do not establish compat
 invalid PVR samples and calibration ownership across OpenVR, OpenXR and LibOVR.
 `CheekyTests --libovr-transfer` checks retained calibration with both D3D11
 and D3D12 sources feeding LibOVR D3D11 submissions. These checks do not add
-native LibOVR D3D12 swap-chain calibration. Vulkan work is deferred: no new
-Vulkan implementation or Vulkan validation is included in this follow-up.
+native LibOVR D3D12 swap-chain calibration. LibOVR Vulkan work is deferred:
+no native LibOVR Vulkan implementation or validation is included. The standard
+suite still exercises the existing Vulkan paths.
 
-The focused LibOVR tests are not a claim that the complete suite is green.
-The retained-calibration matrix has acquisition failures on the existing
-OpenXR path and the added LibOVR D3D12-to-D3D11 case. The latter showed repeated
-ambiguous grid-marker matches during resize reacquisition. Acquisition failures
-print the API/backend, geometry and calibration diagnostics; do not assume the
-10-second deadline means GPU load.
-The UEVR default and `--dx11` checks also currently fail at
-"Calibration policy must reach the shared runtime" on the validation machine.
+`CheekyTests --calibration-search` reproduces a partial-code match that falsely
+resembled a flipped grid marker during resize reacquisition. Refined grid hits
+must match the locator's white/black rings; genuine conflicting identities and
+orientations still reject acquisition. The seven retained-calibration paths,
+including OpenXR and LibOVR D3D12-to-D3D11 transfers, pass this regression.
+Acquisition failures print the API/backend, geometry and calibration diagnostics;
+do not assume the 10-second deadline means GPU load.
+
+UEVR default and `--dx11` tests distinguish the stored full-search retention
+preference from Auto corner calibration's effective continuous validation.
+Core alias discovery fixtures explicitly select the higher D3D12 hook because
+their synthetic core has no lower SR runtime, and wait for the complete D3D12
+callback set before invoking cached exports.
 
 `CheekyRuntimeHostTests --libovr` (also `--libovr-legacy`, `--libovr-late`,
 `--libovr-borrowed` and `--libovr-copied-table`) loads synthetic

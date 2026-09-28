@@ -381,6 +381,26 @@ inline CalibrationSearchResult calibration_search(const CalibrationSearchImage& 
         float other{};
         hit.score = score(hit.x, hit.y, hit.cw, hit.ch, pattern.code);
         if (hit.score < calibration_pattern_min_score) continue;
+        if (options.require_grid && target.marker.locator) {
+            // A partial, shifted fit inside a code can resemble its vertical
+            // reflection. Authenticate the locator's white/black rings at the
+            // refined scale before allowing that fit to establish identity.
+            unsigned pairs{}, matching{};
+            const auto ring_pair = [&](double wx, double wy, double bx, double by) {
+                if (wx < 0 || wy < 0 || wx >= image.width || wy >= image.height ||
+                    bx < 0 || by < 0 || bx >= image.width || by >= image.height) return;
+                ++pairs;
+                matching += sample(wx, wy) - sample(bx, by) >= .04F;
+            };
+            for (double t : {.5, 2.5, 4.5}) {
+                const double x = hit.x + t * hit.cw, y = hit.y + t * hit.ch;
+                ring_pair(x, hit.y - 1.5 * hit.ch, x, hit.y - .5 * hit.ch);
+                ring_pair(x, hit.y + 6.5 * hit.ch, x, hit.y + 5.5 * hit.ch);
+                ring_pair(hit.x - 1.5 * hit.cw, y, hit.x - .5 * hit.cw, y);
+                ring_pair(hit.x + 6.5 * hit.cw, y, hit.x + 5.5 * hit.cw, y);
+            }
+            if (pairs < 6 || matching * 5 < pairs * 4) continue;
+        }
         for (unsigned i = 0; i < templates.size(); ++i) if (i != hit.index)
             other = (std::max)(other, score(hit.x, hit.y, hit.cw, hit.ch, templates[i].code));
         if (hit.score - other < calibration_pattern_min_gap) continue;
