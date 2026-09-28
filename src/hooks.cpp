@@ -4385,11 +4385,14 @@ NgxResult evaluate_with_eye_calibration(ID3D11DeviceContext* context, const NgxH
     // output, so normalize before foveation, transport and marker stamping;
     // otherwise only a corner of the output is composited. Streamline supplies
     // its own extents, as in the DX12 path.
-    const bool normalize = depth.outer && !inside_streamline_evaluation;
+    const bool normalize = depth.outer && !inside_streamline_evaluation && !is_d3d11_private_handle(handle);
     const auto created_output = normalize ? d3d11_game_output_extent(handle) : NgxOutputExtent{};
     const auto evaluated_width = get_ui(parameters, "OutWidth");
     const auto evaluated_height = get_ui(parameters, "OutHeight");
-    const NgxEvaluationExtentScope extent_scope(normalize ? parameters : nullptr, created_output);
+    // Late-adopted features have no observed creation contract. Preserve both
+    // input and output dimensions until the game recreates the feature.
+    const NgxEvaluationExtentScope extent_scope(
+        created_output.width && created_output.height ? parameters : nullptr, created_output);
     if (created_output.width && created_output.height && evaluated_width && evaluated_height &&
         (evaluated_width != created_output.width || evaluated_height != created_output.height)) {
         static std::atomic<std::uint64_t> normalized{};

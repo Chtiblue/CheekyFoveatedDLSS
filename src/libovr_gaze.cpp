@@ -161,7 +161,10 @@ const CheekyEyeCalibrationBridgeV1* calibration_bridge() noexcept {
 void destroy_calibration(std::uint64_t ended) noexcept {
     if (!ended) return;
     std::lock_guard lock(calibration_mutex);
-    if (calibration.generation == ended) calibration.destroy(calibration_bridge());
+    if (calibration.generation == ended) {
+        calibration.destroy(calibration_bridge());
+        calibration_deferred = false;
+    }
     else eye_calibration_destroy_session(ended);
 }
 
@@ -505,6 +508,7 @@ void destroy_chain_hook(ovr::Session value, ovr::SwapChain chain) {
             for (const auto& region : calibration.history)
                 if (region.swapchain == reinterpret_cast<std::uint64_t>(chain)) {
                     calibration.destroy(calibration_bridge());
+                    calibration_deferred = false;
                     break;
                 }
         }

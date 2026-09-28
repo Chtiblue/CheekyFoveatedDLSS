@@ -20,6 +20,14 @@ file. Logging is best effort if the temporary directory cannot be written.
 
 # Cropped stereo calibration
 
+`CheekyTests.exe --libovr-aer-calibration` reproduces legacy AER's single-eye
+commits and verifies acquisition across two frames. It also checks that a pair
+can defer only once and that failed, complete, or destroyed frames do not defer.
+The default suite runs it; CTest registers `CheekyLibOVRAERCalibration`.
+`CheekyRuntimeHostTests --libovr`, with and without `--optiscaler`, exercises the
+actual NGX/LibOVR hooks, rotating image indices, stereo/AER switching, failed
+commits and submissions, and swap-chain recreation while a pair is open.
+
 `CheekyTests.exe --retained-calibration` tests the optional change-only policy
 with actual WARP rendering on DX11/OpenVR, DX11/OpenXR, DX12/OpenVR, DX12/OpenXR,
 DX12-to-DX11/OpenXR, DX11/LibOVR, and DX12-to-DX11/LibOVR. It reads source pixels to verify all markers stop after

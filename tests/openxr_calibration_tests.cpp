@@ -1857,6 +1857,23 @@ void retained_calibration(bool source12, bool submit11, EyeCalibrationBackend ba
 // R.E.A.L. VR's legacy AER over LibOVR: every frame renders and commits one
 // eye, and ovr_EndFrame resubmits the other eye's previous image.
 void libovr_alternating_commits() {
+    {
+        cheeky::openxr_calibration::Frame pending;
+        pending.active = true;
+        pending.history = {{{0x5101,0,0,0,512,512},{0x5102,0,0,0,512,512}}};
+        pending.tickets[0] = 1; pending.released[0] = true;
+        require(libovr_await_second_eye(pending, true, false), "One committed eye may wait for its partner");
+        require(!libovr_await_second_eye(pending, true, true), "Never defer beyond one additional frame");
+        require(!libovr_await_second_eye(pending, false, false), "Failed or unusable frames cannot defer");
+        pending.tickets[1] = 2; pending.released[1] = true;
+        require(!libovr_await_second_eye(pending, true, false), "Complete stereo pairs close immediately");
+        pending.history[1].swapchain = pending.history[0].swapchain;
+        require(!libovr_await_second_eye(pending, true, false), "A shared swap-chain commit closes both captures");
+        pending.released[1] = false;
+        require(!libovr_await_second_eye(pending, true, false), "A captured but failed second eye cannot defer");
+        pending.destroy(nullptr);
+        require(!libovr_await_second_eye(pending, true, false), "Destroyed calibration cannot defer");
+    }
     roles();
     auto settings = configured_settings();
     settings.eye_calibration_continuous = false;

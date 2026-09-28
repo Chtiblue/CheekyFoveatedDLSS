@@ -114,7 +114,7 @@ EXPORT NgxResult NVSDK_NGX_D3D11_CreateFeature(ID3D11DeviceContext* context, uns
         const auto result = forward_create11(context, feature, params, &lower);
         if (!ngx_succeeded(result)) return result;
     }
-    *out=reinterpret_cast<NgxHandle*>(new Feature{++creates, {}, lower}); return 1U;
+    *out=reinterpret_cast<NgxHandle*>(new Feature{++creates, *static_cast<MockNgxParameters*>(params), lower}); return 1U;
 }
 EXPORT NgxResult NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* list, unsigned feature, NgxParameters* params, NgxHandle** out) {
     NgxHandle* lower{};
@@ -125,12 +125,12 @@ EXPORT NgxResult NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* list, 
     *out=reinterpret_cast<NgxHandle*>(new Feature{++creates, *static_cast<MockNgxParameters*>(params), lower}); return 1U;
 }
 EXPORT NgxResult NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceContext* context, const NgxHandle* handle, const NgxParameters* params, NgxProgressCallback callback) {
-    ++evaluates;
-    return forward_evaluate11 ? forward_evaluate11(context, reinterpret_cast<const Feature*>(handle)->lower, params, callback) : 1U;
+    const auto result = evaluate(handle, params);
+    return ngx_succeeded(result) && forward_evaluate11 ? forward_evaluate11(context, reinterpret_cast<const Feature*>(handle)->lower, params, callback) : result;
 }
 EXPORT NgxResult NVSDK_NGX_D3D11_EvaluateFeature_C(ID3D11DeviceContext* context, const NgxHandle* handle, const NgxParameters* params, NgxProgressCallbackC callback) {
-    ++evaluates;
-    return forward_evaluate11_c ? forward_evaluate11_c(context, reinterpret_cast<const Feature*>(handle)->lower, params, callback) : 1U;
+    const auto result = evaluate(handle, params);
+    return ngx_succeeded(result) && forward_evaluate11_c ? forward_evaluate11_c(context, reinterpret_cast<const Feature*>(handle)->lower, params, callback) : result;
 }
 EXPORT NgxResult NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCommandList* list, const NgxHandle* handle, const NgxParameters* params, NgxProgressCallback callback) {
     const auto result = evaluate(handle, params);

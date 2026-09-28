@@ -26,6 +26,7 @@ void** pvr_table{};
 void* table_copy[66]{};
 std::mutex mutex;
 std::atomic<bool> borrowed_buffers{}, copy_table{};
+std::atomic<bool> fail_next_commit{}, fail_next_frame{};
 std::atomic<unsigned> frames{}, commits{}, initialized_minor{};
 void** table() {
     if (!pvr_table) {
@@ -46,7 +47,7 @@ __declspec(noinline) int frame(Session* session, const void* const* layers, unsi
     auto** t = table();
     // Calls go through the table on each frame, as with PVR_API.h.
     if (t && session) reinterpret_cast<PvrFrame>(t[end ? 31 : 34])(session->hmd, frames, layers, count);
-    return 0;
+    return fail_next_frame.exchange(false) ? -1005 : 0;
 }
 }
 
@@ -100,6 +101,7 @@ extern "C" __declspec(dllexport) int ovr_GetTextureSwapChainBufferDX(Session*, C
 }
 extern "C" __declspec(dllexport) int ovr_CommitTextureSwapChain(Session*, Chain* chain) {
     if (!chain) return -1005;
+    if (fail_next_commit.exchange(false)) return -1005;
     std::lock_guard lock(mutex);
     ++commits;
     chain->current = (chain->current + 1) % static_cast<int>(chain->textures.size());
@@ -112,6 +114,8 @@ extern "C" __declspec(dllexport) int ovr_SubmitFrame2(Session* session, long lon
     return frame(session, layers, count, false);
 }
 extern "C" __declspec(dllexport) void CheekyFakeLibOVR_SetBorrowedBuffers(bool value) { borrowed_buffers = value; }
+extern "C" __declspec(dllexport) void CheekyFakeLibOVR_FailNextCommit() { fail_next_commit = true; }
+extern "C" __declspec(dllexport) void CheekyFakeLibOVR_FailNextFrame() { fail_next_frame = true; }
 // Copy now, as a runtime that initialized before Cheeky attached would have.
 extern "C" __declspec(dllexport) void CheekyFakeLibOVR_CopyPvrTable() { copy_table = true; table(); }
 extern "C" __declspec(dllexport) unsigned CheekyFakeLibOVR_Frames() { return frames.load(); }

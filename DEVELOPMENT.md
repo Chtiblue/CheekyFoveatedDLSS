@@ -80,6 +80,19 @@ Play's compatibility runtime or R.E.A.L. VR. `CheekyTests --libovr-aer-calibrati
 commits one eye per LibOVR frame, as R.E.A.L. VR's legacy AER does, and checks
 that calibration pairs the commits across frames.
 
+The `--libovr` runtime-host case also exercises real NGX and LibOVR hooks with
+three rotating swap-chain images: alternate-eye acquisition, switching to
+ordinary stereo, failed commits/submissions, and recreation during an open pair.
+It runs for standalone and OptiScaler. These are WARP/fixture checks; BG3 on a
+Pimax headset still needs validation with both AER modes and menu transitions.
+
+DX11 late-attachment tests cover stale output dimensions after feature creation,
+with and without peripheral DLAA, plus parameter restoration after native
+success and failure. Late-adopted features keep their input and output dimensions
+until their creation contract is observed. The transport fixtures read back the
+entire output after a stale query, including with peripheral DLAA enabled.
+Native LibOVR D3D12 swap chains and LibOVR Vulkan remain outside these changes.
+
 ## Packaging
 
 ```powershell
