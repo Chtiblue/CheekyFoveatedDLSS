@@ -423,7 +423,10 @@ int main(int argc, char** argv) {
         }
         if (dx11) {
             command("1\n10\nset\nD3D11D3D12Transport=true");
-            require(received.find("transport is unavailable")!=received.npos,"DX11 transport rejected explicitly");
+            require(received.find("Settings applied")!=received.npos,"UEVR accepts DX11 transport");
+            reset(); present();
+            require(snapshot(get).find("\"D3D11D3D12Transport\":true") != std::string::npos,
+                "UEVR graphics recovery preserves transport preference");
             command("1\n11\ndefaults");
             require(received.find("Settings applied")!=received.npos,"DX11 defaults remain usable");
         }

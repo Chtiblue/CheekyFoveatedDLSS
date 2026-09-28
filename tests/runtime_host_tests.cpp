@@ -563,7 +563,7 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
 int main(int argc, char** argv) {
     try {
         bool ota_transport{}, ota_only{};
-        bool dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
+        bool uevr{}, dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
         unsigned openvr_version{}, libovr_mode{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
@@ -574,6 +574,7 @@ int main(int argc, char** argv) {
             else if (arg == "--libovr-copied-table") libovr_mode = 4;
             else if (arg == "--libovr-late") libovr_mode = 5;
             else if (arg == "--conflict") conflict = true;
+            else if (arg == "--uevr") uevr = true;
             else if (arg == "--optiscaler") optiscaler = true;
             else if (arg == "--transport-ota-only") { ota_only = ota_transport = transport = dx11 = true; }
             else if (arg == "--transport-ota") { ota_transport = transport = dx11 = true; }
@@ -681,7 +682,7 @@ int main(int argc, char** argv) {
         CheekyRuntimeStart input;
         input.config_directory = directory_text.c_str(); input.attachment = &attachment;
         input.renderer = dx11 ? 0U : 1U;
-        input.host = optiscaler ? CheekyRuntimeHost::optiscaler : CheekyRuntimeHost::standalone;
+        input.host = uevr ? CheekyRuntimeHost::uevr : optiscaler ? CheekyRuntimeHost::optiscaler : CheekyRuntimeHost::standalone;
         auto bad = input; ++bad.abi; require(!start(&bad), "Reject unknown ABI");
         bad = input; --bad.size; require(!start(&bad), "Reject invalid Start size");
         bad = input; bad.renderer = UINT32_MAX; require(!start(&bad), "Reject unsupported renderer");
@@ -694,7 +695,12 @@ int main(int argc, char** argv) {
             puts("PASS: generic runtime ownership conflict");
             return 0;
         }
+        if (uevr) {
+            std::ofstream saved(directory / "CheekyFoveatedDLSS.ini");
+            saved << "[CheekyFoveatedDLSS]\nSchemaVersion=1\nD3D11D3D12Transport=true\n";
+        }
         require(start(&input) && attachment != 0, "Start before graphics discovery");
+        if (uevr) require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR loads saved transport preference");
         if (libovr_mode) {
             verify_libovr(libovr_mode, fake_libovr, fake_pvr, get, command, attachment);
             detach(attachment);
@@ -729,8 +735,8 @@ int main(int argc, char** argv) {
         auto text = snapshot(get);
         require(contains(text, "\"attached\":true") && contains(text, "\"ready\":false") &&
             contains(text, "\"processing\":false"), "Pending graphics keeps processing paused");
-        require(contains(text, optiscaler ? "\"host\":\"optiscaler\"" : "\"host\":\"standalone\""), "Snapshot identifies the actual host");
-        require(contains(text, "\"host_supports_afw_projection\":false"), "Generic host does not claim UEVR projection data");
+        require(contains(text, uevr ? "\"host\":\"uevr\"" : optiscaler ? "\"host\":\"optiscaler\"" : "\"host\":\"standalone\""), "Snapshot identifies the actual host");
+        require(contains(text, uevr ? "\"host_supports_afw_projection\":true" : "\"host_supports_afw_projection\":false"), "Projection capability matches host");
         require(command(attachment, "1\n1\nset\nEnabled=true\nWidth=0.63"), "Settings available before graphics");
         require(contains(snapshot(get), "\"processing\":false"), "Settings cannot bypass graphics readiness");
 
@@ -781,11 +787,24 @@ int main(int argc, char** argv) {
             require(contains(snapshot(get), "Cached runtime loaded; use not observed"), "Loading alone does not claim override active");
         }
         if (transport) verify_transport(command, get, attachment, device11.Get(), context11.Get(), fake_ngx,
-            directory / (optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{});
+            directory / (uevr ? "CheekyFoveatedDLSS-UEVR.log" : optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{});
         if (ota_transport) {
             require(contains(snapshot(get), "Active (NVIDIA cached runtime)"), "Override status follows actual OTA evaluations");
             detach(attachment);
             puts("PASS: late NVIDIA OTA transport selects matching DX12 callbacks and executes SR/NR");
+            return 0;
+        }
+        if (uevr) {
+            require(transport, "UEVR runtime fixture exercises transport");
+            tick(attachment, input.renderer, nullptr, nullptr);
+            tick(attachment, input.renderer, device, nullptr);
+            require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR reset preserves transport");
+            detach(attachment);
+            require(start(&input), "Reconnect UEVR host");
+            tick(attachment, input.renderer, device, nullptr);
+            require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR reconnect preserves transport");
+            detach(attachment);
+            puts("PASS: UEVR DX11 transport and NR, device reset and reconnect");
             return 0;
         }
         if(depth24 || backpressure){detach(attachment);return 0;}

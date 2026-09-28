@@ -543,7 +543,7 @@ def run(engine):
     state["renderer"] = 0
     receive(state)
     draw()
-    assert any("unavailable on the DX11" in t for t in g.drawn.values())
+    assert any("DLSS-NR on DX11 requires DX12 transport." in t for t in g.drawn.values())
     state["settings"]["CenterMode"] = 2
     state["settings"]["AutoStereoAlignment"] = False
     receive(state)
@@ -587,6 +587,30 @@ def run(engine):
     draw()
     assert g["values"]["Rendering order"] == 1 and g["values"]["NR working scale"] == 0.37
     assert len(g.sent) == count, "Reconnect resent a discarded rendering-order edit"
+    state["renderer"] = 0
+    state["revision"] += 1
+    state["settings"].update(D3D11D3D12Transport=False, NrEnabled=False)
+    receive(state)
+    draw()
+    assert g["values"]["DX11 -> DX12 transport"] is False
+    assert g["values"]["Enable DLSS-NR"] is None
+    draw(changes={"DX11 -> DX12 transport": True})
+    assert "D3D11D3D12Transport=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["D3D11D3D12Transport"] = True
+    receive(state)
+    draw()
+    assert g["values"]["Enable DLSS-NR"] is False
+    draw(changes={"Enable DLSS-NR": True})
+    assert "NrEnabled=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrEnabled"] = True
+    receive(state)
+    state["renderer"] = 1
+    receive(state)
+    draw()
+    assert g["values"]["DX11 -> DX12 transport"] is None
+    assert g["values"]["Enable DLSS-NR"] is True
     print(engine + ": menu, protocol, drafts, acknowledgements, slider release and reconnect passed")
 
 

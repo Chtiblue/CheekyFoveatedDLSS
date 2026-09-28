@@ -320,12 +320,6 @@ bool configure_graphics(State& s, std::uint32_t renderer, void* device, void* qu
         return false;
     }
     if (previous_renderer == renderer && s.observed_device == device && s.observed_queue == queue && s.graphics_ready) return true;
-    // Preserve the legacy UEVR policy. Other native hosts can use the existing
-    // transport, whose private queue is observed by the NR lifetime layer.
-    if (renderer == 0 && s.host == CheekyRuntimeHost::uevr && configured_settings().d3d11_use_d3d12_transport) {
-        auto settings = configured_settings(); settings.d3d11_use_d3d12_transport = false;
-        update_settings(settings); ++s.revision; request_save(s);
-    }
     if (renderer == 1 && !initialize_native_observer(static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue))) {
         s.graphics_ready = false;
         s.message = "D3D12 submission observer unavailable; processing paused";
@@ -392,8 +386,6 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Start(const CheekyRuntimeSta
                     s.failed = true; log_error(s.message.c_str()); return false;
                 }
             }
-            // Retain the existing UEVR adapter's direct-DX11 default.
-            if (input->renderer == 0 && s.host == CheekyRuntimeHost::uevr) settings.d3d11_use_d3d12_transport = false;
             update_settings(settings); s.revision = 1;
             set_eye_calibration_learning(settings.eye_calibration_learned_method,
                 settings.eye_calibration_learned_signature, settings.eye_calibration_learned_sessions);
@@ -550,13 +542,11 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
         auto settings = configured_settings();
         if (action == "defaults") {
             settings = Settings{};
-            if (s.renderer == 0 && s.host == CheekyRuntimeHost::uevr) settings.d3d11_use_d3d12_transport = false;
         }
         else if (action.starts_with("defaults_")) {
             if (!reset_settings_group(settings, std::string_view(action).substr(9))) {
                 s.message = "Unknown settings group"; return false;
             }
-            if (s.renderer == 0 && s.host == CheekyRuntimeHost::uevr) settings.d3d11_use_d3d12_transport = false;
         }
         else if (action == "set") {
             std::string line; unsigned count{};
@@ -573,9 +563,6 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
             }
             if (!count) return false;
         } else { s.message = "Unknown command"; return false; }
-        if (s.renderer == 0 && s.host == CheekyRuntimeHost::uevr && settings.d3d11_use_d3d12_transport) {
-            s.message = "DX11-to-DX12 transport is unavailable in this host; use DX11 direct or a DX12 game"; return false;
-        }
         update_settings(settings); ++s.revision; s.applied_request = id;
         s.message = "Settings applied"; request_save(s); return true;
     } catch (...) { return false; }
