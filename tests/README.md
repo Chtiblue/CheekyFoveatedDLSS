@@ -3,10 +3,14 @@
 `CheekyTests.exe --openxr-input` loads the production layer DLL against a mock
 downstream layer/runtime. Extension discovery covers unavailable function lookup,
 failed count/list enumeration, confirmed presence/absence, successful gaze after
-an unanswered probe, and one retry when speculative gaze is rejected. It also
+an unanswered probe, and bounded retries when speculative extensions are rejected. It also
 checks application extension preservation, error propagation, system support,
-and confirmed cylinder support. Unknown cylinder support retains the existing
-quad menu fallback. These fixtures do not replace an OFXR/headset retest.
+and every combination of gaze/cylinder support. When both probes are unanswered,
+attempts request both, gaze only, cylinder only, then neither, stopping at the
+first success or any error other than `XR_ERROR_EXTENSION_NOT_PRESENT`.
+Application-requested and confirmed extensions are retained on every attempt.
+Unsupported cylinders retain the existing quad menu fallback. These fixtures
+do not replace an OFXR/headset retest.
 Startup history is persisted in `%TEMP%/CheekyOpenXR-<pid>-<process-start>.log`
 and collected as `CheekyOpenXR-startup.log` in support ZIPs. It includes probe
 stages/results, application-requested extensions, retries and final enabled

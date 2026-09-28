@@ -229,15 +229,27 @@ int run_openxr_input_tests() {
         // extensions before creation, including runtimes without gaze support.
         for (unsigned failure = 0; failure <= 3; ++failure) {
             for (bool gaze : {false, true}) {
+              for (bool cylinder : {false, true}) {
                 Runtime::reset(); Runtime::probe_failure = failure; Runtime::extension = gaze;
+                Runtime::cylinder = cylinder;
                 const auto log_start = read_file(cheeky::openxr_startup_log_path()).size();
                 Layer layer(false, {"XR_TEST_host_extension"});
-                const auto attempts = failure && !gaze ? 2U : 1U;
+                const auto attempts = !failure ? 1U : gaze ? (cylinder ? 1U : 2U) : (cylinder ? 3U : 4U);
                 require(Runtime::create_requests.size() == attempts, "Incorrect extension retry count");
                 for (const auto& names : Runtime::create_requests) {
                     require(names.front() == "XR_TEST_host_extension", "Retry lost an application extension");
-                    require(std::find(names.begin(), names.end(), XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) == names.end(),
-                        "Unknown cylinder support must use the existing menu fallback");
+                }
+                const auto& final_names = Runtime::create_requests.back();
+                require((std::find(final_names.begin(), final_names.end(), XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME)
+                    != final_names.end()) == cylinder, "Successful instance must retain supported cylinders");
+                if (failure) {
+                    for (unsigned i = 0; i < attempts; ++i) {
+                        const auto& names = Runtime::create_requests[i];
+                        const bool requested_gaze = std::find(names.begin(), names.end(), XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) != names.end();
+                        const bool requested_cylinder = std::find(names.begin(), names.end(), XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) != names.end();
+                        require(requested_gaze == (i < 2) && requested_cylinder == (i % 2 == 0),
+                            "Retries must prefer gaze, then recover cylinder-only support");
+                    }
                 }
                 require(Runtime::injected == gaze, "Successful instance has incorrect gaze extension state");
                 const auto host = layer.create_host_set();
@@ -251,9 +263,11 @@ int run_openxr_input_tests() {
                 const auto availability = failure ? "unknown" : gaze ? "present" : "absent";
                 require(log.find(std::string("availability=") + availability) != std::string::npos,
                     "Persistent log missing probe outcome");
-                require(log.find("instance_create end result=0 gaze_enabled=" + std::to_string(gaze)) != std::string::npos,
-                    "Persistent log missing final gaze state");
-                require((log.find("attempt=2 result=0") != std::string::npos) == (attempts == 2),
+                require(log.find("instance_create end result=0 gaze_enabled=" + std::to_string(gaze) +
+                    " cylinder_enabled=" + std::to_string(cylinder)) != std::string::npos,
+                    "Persistent log missing final extension states");
+                require(log.find("attempt=" + std::to_string(attempts) + " result=0") != std::string::npos &&
+                    log.find("attempt=" + std::to_string(attempts + 1)) == std::string::npos,
                     "Persistent log missing or inventing retry history");
                 if (failure) {
                     const auto stage = failure == 1 ? "lookup" : failure == 2 ? "count" : "list";
@@ -261,6 +275,7 @@ int run_openxr_input_tests() {
                     require(log.find(std::string("stage=") + stage + " result=" + std::to_string(error)) != std::string::npos,
                         "Persistent log missing failed probe stage/result");
                 }
+              }
             }
         }
         Runtime::reset(); Runtime::probe_failure = 1; Runtime::supported = false;
@@ -272,8 +287,22 @@ int run_openxr_input_tests() {
             Runtime::reset(); Runtime::probe_failure = 1; Runtime::extension = gaze;
             Layer layer(false, {XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME},
                 gaze ? XR_SUCCESS : XR_ERROR_EXTENSION_NOT_PRESENT);
-            require(Runtime::create_requests.size() == 1 && Runtime::create_requests[0].size() == 1,
+            require(Runtime::create_requests.size() == 2 && Runtime::create_requests.back().size() == 1,
                 "Application gaze extension must not be duplicated or removed");
+            for (const auto& names : Runtime::create_requests) {
+                require(std::count(names.begin(), names.end(), XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 1,
+                    "Every retry must preserve application-requested gaze");
+            }
+        }
+        for (bool cylinder : {false, true}) {
+            Runtime::reset(); Runtime::probe_failure = 1; Runtime::extension = false; Runtime::cylinder = cylinder;
+            Layer layer(false, {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME},
+                cylinder ? XR_SUCCESS : XR_ERROR_EXTENSION_NOT_PRESENT);
+            require(Runtime::create_requests.size() == 2, "Unknown gaze alone requires at most one retry");
+            for (const auto& names : Runtime::create_requests) {
+                require(std::count(names.begin(), names.end(), XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) == 1,
+                    "Every retry must preserve application-requested cylinders");
+            }
         }
         for (const auto error : {XR_ERROR_RUNTIME_FAILURE, XR_ERROR_EXTENSION_NOT_PRESENT}) {
             Runtime::reset(); Runtime::create_result = error;
@@ -285,7 +314,7 @@ int run_openxr_input_tests() {
         {
             const auto log_start = read_file(cheeky::openxr_startup_log_path()).size();
             Layer layer(false, {"XR_TEST_host_extension"}, XR_ERROR_EXTENSION_NOT_PRESENT);
-            require(Runtime::create_requests.size() == 2 && Runtime::create_requests.back().size() == 1,
+            require(Runtime::create_requests.size() == 4 && Runtime::create_requests.back().size() == 1,
                 "Failed retry must propagate without dropping host extensions or retrying indefinitely");
             const auto log = read_file(cheeky::openxr_startup_log_path()).substr(log_start);
             require(log.find("instance_create end result=" + std::to_string(XR_ERROR_EXTENSION_NOT_PRESENT) +

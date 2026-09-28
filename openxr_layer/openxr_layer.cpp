@@ -1706,49 +1706,45 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrCreateApiLayerInstance(
     bool cylinder_enabled{};
     for (std::uint32_t i{}; i < info->enabledExtensionCount; ++i)
         cylinder_enabled |= std::strcmp(info->enabledExtensionNames[i], XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) == 0;
-    const bool inject_cylinder = !cylinder_enabled &&
-        extension_availability(next_gipa, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) ==
-            ExtensionAvailability::present;
-    // Do not speculate about cylinders: the menu already has a quad fallback.
+    const auto cylinder_availability = cylinder_enabled ? ExtensionAvailability::present :
+        extension_availability(next_gipa, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+    bool inject_cylinder = !cylinder_enabled && cylinder_availability != ExtensionAvailability::absent;
     if (cylinder_enabled) log_startup("probe extension=%s availability=application_requested\n", XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
-    log_startup("instance_create attempt=1 gaze_requested=%u cylinder_requested=%u\n",
-        unsigned(already_enabled || inject_extension), unsigned(cylinder_enabled || inject_cylinder));
-    std::vector<const char*> extensions;
-    XrInstanceCreateInfo forwarded_info = *info;
-    if (inject_extension || inject_cylinder) {
-        if (info->enabledExtensionCount != 0U &&
-            info->enabledExtensionNames != nullptr) {
-            extensions.assign(
-                info->enabledExtensionNames,
-                info->enabledExtensionNames + info->enabledExtensionCount
-            );
+    if (cylinder_availability == ExtensionAvailability::unknown) {
+        log_startup("cylinder extension probe unanswered; trying extension at instance creation\n");
+    }
+    // Try subsets of only speculative requests, preferring gaze over cylinders:
+    // both, gaze only, cylinder only, neither. Confirmed/application extensions
+    // remain requested on every attempt. Other errors stop immediately.
+    constexpr int gaze_bit = 2, cylinder_bit = 1;
+    const int unknown = (gaze_availability == ExtensionAvailability::unknown ? gaze_bit : 0) |
+        (cylinder_availability == ExtensionAvailability::unknown ? cylinder_bit : 0);
+    XrResult result = XR_ERROR_EXTENSION_NOT_PRESENT;
+    unsigned attempt{};
+    for (int selection = unknown; selection >= 0; --selection) {
+        if ((selection & ~unknown) != 0) continue;
+        inject_extension = !already_enabled && (gaze_availability == ExtensionAvailability::present ||
+            (selection & gaze_bit) != 0);
+        inject_cylinder = !cylinder_enabled && (cylinder_availability == ExtensionAvailability::present ||
+            (selection & cylinder_bit) != 0);
+        std::vector<const char*> extensions;
+        if (info->enabledExtensionCount != 0U) {
+            extensions.assign(info->enabledExtensionNames, info->enabledExtensionNames + info->enabledExtensionCount);
         }
         if (inject_extension) extensions.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
         if (inject_cylinder) extensions.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
-        forwarded_info.enabledExtensionCount = static_cast<std::uint32_t>(
-            extensions.size()
-        );
-        forwarded_info.enabledExtensionNames = extensions.data();
-    }
-
-    XrApiLayerCreateInfo next_layer_info = *layer_info;
-    next_layer_info.nextInfo = layer_info->nextInfo->next;
-    auto result = next_create(
-        &forwarded_info, &next_layer_info, instance
-    );
-    log_startup("instance_create attempt=1 result=%d\n", result);
-    if (result == XR_ERROR_EXTENSION_NOT_PRESENT && inject_extension &&
-        gaze_availability == ExtensionAvailability::unknown) {
-        // Remove only our speculative request, never an application extension.
-        extensions.erase(std::remove_if(extensions.begin(), extensions.end(), [](const char* name) {
-            return std::strcmp(name, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0;
-        }), extensions.end());
+        XrInstanceCreateInfo forwarded_info = *info;
         forwarded_info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
         forwarded_info.enabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
-        inject_extension = false;
-        log_startup("instance_create attempt=2 reason=extension_not_present removing_speculative_gaze=1\n");
+        XrApiLayerCreateInfo next_layer_info = *layer_info;
+        next_layer_info.nextInfo = layer_info->nextInfo->next;
+        ++attempt;
+        log_startup("instance_create attempt=%u gaze_requested=%u cylinder_requested=%u reason=%s\n",
+            attempt, unsigned(already_enabled || inject_extension), unsigned(cylinder_enabled || inject_cylinder),
+            attempt == 1 ? "initial" : "extension_not_present");
         result = next_create(&forwarded_info, &next_layer_info, instance);
-        log_startup("instance_create attempt=2 result=%d\n", result);
+        log_startup("instance_create attempt=%u result=%d\n", attempt, result);
+        if (result != XR_ERROR_EXTENSION_NOT_PRESENT) break;
     }
     log_startup("instance_create end result=%d gaze_enabled=%u cylinder_enabled=%u\n", result,
         unsigned(XR_SUCCEEDED(result) && (already_enabled || inject_extension)),
