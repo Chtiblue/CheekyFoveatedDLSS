@@ -14,6 +14,7 @@
 #include <openxr/openxr_platform.h>
 
 #include "cheeky_gaze_abi.h"
+#include "openxr_startup_log.hpp"
 #include "gaze_math.hpp"
 #include "eye_calibration.hpp"
 #include "projection_selection.hpp"
@@ -28,6 +29,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <cmath>
 #include <mutex>
@@ -1135,25 +1137,64 @@ void publish_snapshot_locked(const SessionState* const session) noexcept {
     return value;
 }
 
-[[nodiscard]] bool extension_available(
+enum class ExtensionAvailability { present, absent, unknown };
+
+void log_startup(const char* format, ...) noexcept {
+    // Startup only; failure to write diagnostics must never affect OpenXR.
+    try {
+        static std::mutex log_mutex;
+        std::lock_guard lock(log_mutex);
+        char message[1024]{};
+        va_list args;
+        va_start(args, format);
+        vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
+        va_end(args);
+        char line[1200]{};
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "tick=%llu thread=%lu %s",
+            GetTickCount64(), GetCurrentThreadId(), message);
+        OutputDebugStringA(line);
+        const auto path = cheeky::openxr_startup_log_path();
+        if (path.empty()) return;
+        const auto file = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return;
+        DWORD written{};
+        WriteFile(file, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+        CloseHandle(file);
+    } catch (...) {}
+}
+
+[[nodiscard]] ExtensionAvailability extension_availability(
     const PFN_xrGetInstanceProcAddr gipa,
     const char* name = XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME
 ) noexcept {
-    const auto enumerate = load_function<PFN_xrEnumerateInstanceExtensionProperties>(
-        gipa, XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties"
-    );
-    if (enumerate == nullptr) return false;
+    PFN_xrVoidFunction function{};
+    const auto lookup = gipa(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", &function);
+    if (XR_FAILED(lookup) || !function) {
+        log_startup("probe extension=%s stage=lookup result=%d function_present=%u availability=unknown\n",
+            name, lookup, function ? 1U : 0U);
+        return ExtensionAvailability::unknown;
+    }
+    const auto enumerate = reinterpret_cast<PFN_xrEnumerateInstanceExtensionProperties>(function);
     std::uint32_t count{};
-    if (XR_FAILED(enumerate(nullptr, 0U, &count, nullptr)) || count == 0U) {
-        return false;
+    const auto count_result = enumerate(nullptr, 0U, &count, nullptr);
+    if (XR_FAILED(count_result)) {
+        log_startup("probe extension=%s stage=count result=%d availability=unknown\n", name, count_result);
+        return ExtensionAvailability::unknown;
+    }
+    if (count == 0U) {
+        log_startup("probe extension=%s stage=count result=%d availability=absent\n", name, count_result);
+        return ExtensionAvailability::absent;
     }
     std::vector<XrExtensionProperties> properties(
         count, XrExtensionProperties{XR_TYPE_EXTENSION_PROPERTIES}
     );
-    if (XR_FAILED(enumerate(nullptr, count, &count, properties.data()))) {
-        return false;
+    const auto list_result = enumerate(nullptr, count, &count, properties.data());
+    if (XR_FAILED(list_result)) {
+        log_startup("probe extension=%s stage=list result=%d availability=unknown\n", name, list_result);
+        return ExtensionAvailability::unknown;
     }
-    return std::any_of(
+    const auto found = std::any_of(
         properties.begin(), properties.end(), [name](const auto& property) {
             return std::strcmp(
                 property.extensionName,
@@ -1161,6 +1202,9 @@ void publish_snapshot_locked(const SessionState* const session) noexcept {
             ) == 0;
         }
     );
+    log_startup("probe extension=%s stage=list result=%d availability=%s\n", name, list_result,
+        found ? "present" : "absent");
+    return found ? ExtensionAvailability::present : ExtensionAvailability::absent;
 }
 
 [[nodiscard]] bool create_gaze_action(InstanceState& state) noexcept {
@@ -1631,10 +1675,12 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrCreateApiLayerInstance(
     const XrApiLayerCreateInfo* const layer_info,
     XrInstance* const instance
 ) {
+    log_startup("instance_create begin thread=%lu\n", GetCurrentThreadId());
     if (info == nullptr || layer_info == nullptr || instance == nullptr ||
         layer_info->nextInfo == nullptr ||
         layer_info->nextInfo->nextGetInstanceProcAddr == nullptr ||
         layer_info->nextInfo->nextCreateApiLayerInstance == nullptr) {
+        log_startup("instance_create invalid_arguments result=%d\n", XR_ERROR_INITIALIZATION_FAILED);
         return XR_ERROR_INITIALIZATION_FAILED;
     }
 
@@ -1650,12 +1696,23 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrCreateApiLayerInstance(
             break;
         }
     }
-    const bool inject_extension = !already_enabled && extension_available(next_gipa);
+    const auto gaze_availability = already_enabled ? ExtensionAvailability::present :
+        extension_availability(next_gipa);
+    bool inject_extension = !already_enabled && gaze_availability != ExtensionAvailability::absent;
+    if (already_enabled) log_startup("probe extension=%s availability=application_requested\n", XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+    if (gaze_availability == ExtensionAvailability::unknown) {
+        log_startup("eye-gaze extension probe unanswered; trying extension at instance creation\n");
+    }
     bool cylinder_enabled{};
     for (std::uint32_t i{}; i < info->enabledExtensionCount; ++i)
         cylinder_enabled |= std::strcmp(info->enabledExtensionNames[i], XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) == 0;
     const bool inject_cylinder = !cylinder_enabled &&
-        extension_available(next_gipa, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        extension_availability(next_gipa, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) ==
+            ExtensionAvailability::present;
+    // Do not speculate about cylinders: the menu already has a quad fallback.
+    if (cylinder_enabled) log_startup("probe extension=%s availability=application_requested\n", XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+    log_startup("instance_create attempt=1 gaze_requested=%u cylinder_requested=%u\n",
+        unsigned(already_enabled || inject_extension), unsigned(cylinder_enabled || inject_cylinder));
     std::vector<const char*> extensions;
     XrInstanceCreateInfo forwarded_info = *info;
     if (inject_extension || inject_cylinder) {
@@ -1676,9 +1733,26 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrCreateApiLayerInstance(
 
     XrApiLayerCreateInfo next_layer_info = *layer_info;
     next_layer_info.nextInfo = layer_info->nextInfo->next;
-    const auto result = next_create(
+    auto result = next_create(
         &forwarded_info, &next_layer_info, instance
     );
+    log_startup("instance_create attempt=1 result=%d\n", result);
+    if (result == XR_ERROR_EXTENSION_NOT_PRESENT && inject_extension &&
+        gaze_availability == ExtensionAvailability::unknown) {
+        // Remove only our speculative request, never an application extension.
+        extensions.erase(std::remove_if(extensions.begin(), extensions.end(), [](const char* name) {
+            return std::strcmp(name, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0;
+        }), extensions.end());
+        forwarded_info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+        forwarded_info.enabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
+        inject_extension = false;
+        log_startup("instance_create attempt=2 reason=extension_not_present removing_speculative_gaze=1\n");
+        result = next_create(&forwarded_info, &next_layer_info, instance);
+        log_startup("instance_create attempt=2 result=%d\n", result);
+    }
+    log_startup("instance_create end result=%d gaze_enabled=%u cylinder_enabled=%u\n", result,
+        unsigned(XR_SUCCEEDED(result) && (already_enabled || inject_extension)),
+        unsigned(XR_SUCCEEDED(result) && (cylinder_enabled || inject_cylinder)));
     if (XR_FAILED(result)) return result;
 
     InstanceState state{};

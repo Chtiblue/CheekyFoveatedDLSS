@@ -1,3 +1,19 @@
+# OpenXR extension discovery
+
+`CheekyTests.exe --openxr-input` loads the production layer DLL against a mock
+downstream layer/runtime. Extension discovery covers unavailable function lookup,
+failed count/list enumeration, confirmed presence/absence, successful gaze after
+an unanswered probe, and one retry when speculative gaze is rejected. It also
+checks application extension preservation, error propagation, system support,
+and confirmed cylinder support. Unknown cylinder support retains the existing
+quad menu fallback. These fixtures do not replace an OFXR/headset retest.
+Startup history is persisted in `%TEMP%/CheekyOpenXR-<pid>-<process-start>.log`
+and collected as `CheekyOpenXR-startup.log` in support ZIPs. It includes probe
+stages/results, application-requested extensions, retries and final enabled
+states, including failed instance creation. Tests verify the file and its
+inclusion in UEVR, standalone and OptiScaler bundles. ReShade collects the same
+file. Logging is best effort if the temporary directory cannot be written.
+
 # Cropped stereo calibration
 
 `CheekyTests.exe --retained-calibration` tests the optional change-only policy

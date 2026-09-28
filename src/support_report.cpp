@@ -1,5 +1,6 @@
 #include "support_report.hpp"
 #include "support_zip.hpp"
+#include "openxr_startup_log.hpp"
 #include "support_summary.hpp"
 #include "support_prompts.hpp"
 #include "diagnostics.hpp"
@@ -369,6 +370,7 @@ PreparedReport create_report(const fs::path& addon, const fs::path& game,
         << "See stereo-capture.json for original resolutions, crop bounds, sample regions and missing-image reasons.\n"
         << "Source A/B are unconfirmed candidates; submitted eye labels are in the JSON. HDR values are clamped for preview.\n\n";
     collect_log(files, manifest, addon.parent_path() / L"CheekyFoveatedDLSS.log", "CheekyFoveatedDLSS.log");
+    collect_log(files, manifest, cheeky::openxr_startup_log_path(), "CheekyOpenXR-startup.log");
     collect_log(files, manifest, game.parent_path() / L"ReShade.log", "ReShade-game.log");
     if (addon.parent_path() != game.parent_path())
         collect_log(files, manifest, addon.parent_path() / L"ReShade.log", "ReShade-addon.log");

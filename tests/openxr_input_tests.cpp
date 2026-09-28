@@ -4,11 +4,13 @@
 #include "cheeky_gaze_abi.h"
 #include "gaze_foveation.hpp"
 #include "../openxr_layer/menu_geometry.hpp"
+#include "../uevr/support_bundle.hpp"
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -17,6 +19,10 @@ template<class T> T handle(std::uintptr_t n) { return reinterpret_cast<T>(n); }
 struct Runtime {
     inline static bool extension = true, supported = true, focused = true, active = true;
     inline static bool attached{}, synced{}, injected{};
+    inline static unsigned probe_failure{}; // 1: lookup, 2: count, 3: list
+    inline static bool cylinder{};
+    inline static XrResult create_result = XR_SUCCESS;
+    inline static std::vector<std::vector<std::string>> create_requests;
     inline static XrResult attach_result = XR_SUCCESS, sync_result = XR_SUCCESS,
         binding_result = XR_SUCCESS, locate_result = XR_SUCCESS, space_result = XR_SUCCESS;
     inline static unsigned attaches{}, syncs{}, bindings{}, locates{}, created{};
@@ -25,22 +31,38 @@ struct Runtime {
     static void reset() {
         extension = supported = focused = active = true;
         attached = synced = injected = false;
+        probe_failure = 0; cylinder = false; create_result = XR_SUCCESS; create_requests.clear();
         attach_result = sync_result = binding_result = locate_result = space_result = XR_SUCCESS;
         attaches = syncs = bindings = locates = created = 0;
         attached_sets.clear(); active_sets.clear();
     }
     static XrResult XRAPI_CALL create(const XrInstanceCreateInfo* info,
         const XrApiLayerCreateInfo*, XrInstance* instance) {
-        for (unsigned i = 0; i < info->enabledExtensionCount; ++i)
-            injected |= !strcmp(info->enabledExtensionNames[i], XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+        create_requests.emplace_back();
+        bool requested_gaze{}, requested_cylinder{};
+        for (unsigned i = 0; i < info->enabledExtensionCount; ++i) {
+            create_requests.back().emplace_back(info->enabledExtensionNames[i]);
+            requested_gaze |= !strcmp(info->enabledExtensionNames[i], XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+            requested_cylinder |= !strcmp(info->enabledExtensionNames[i], XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        }
+        if (XR_FAILED(create_result)) return create_result;
+        if ((requested_gaze && !extension) || (requested_cylinder && !cylinder)) return XR_ERROR_EXTENSION_NOT_PRESENT;
+        injected = requested_gaze;
         *instance = handle<XrInstance>(1); return XR_SUCCESS;
     }
     static XrResult XRAPI_CALL get(XrInstance, const char* name, PFN_xrVoidFunction* out) {
         *out = nullptr;
+        if (probe_failure == 1 && !strcmp(name, "xrEnumerateInstanceExtensionProperties"))
+            return XR_ERROR_FUNCTION_UNSUPPORTED;
 #define FN(n, ...) if (!strcmp(name, n)) { *out = reinterpret_cast<PFN_xrVoidFunction>(+__VA_ARGS__); return XR_SUCCESS; }
         FN("xrEnumerateInstanceExtensionProperties", [](const char*, uint32_t capacity, uint32_t* count, XrExtensionProperties* props) {
-            *count = extension ? 1 : 0;
-            if (extension && capacity) strcpy_s(props[0].extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+            if (probe_failure == 2 || (probe_failure == 3 && capacity)) return XR_ERROR_RUNTIME_FAILURE;
+            *count = probe_failure == 3 ? 1U : unsigned(extension) + unsigned(cylinder);
+            if (capacity) {
+                unsigned i{};
+                if (extension) strcpy_s(props[i++].extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+                if (cylinder) strcpy_s(props[i].extensionName, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+            }
             return XR_SUCCESS;
         });
         FN("xrGetInstanceProperties", [](XrInstance, XrInstanceProperties* p) { strcpy_s(p->runtimeName, "Gaze mock"); return XR_SUCCESS; });
@@ -124,7 +146,7 @@ struct Layer {
         require(get(instance, name, &f) == XR_SUCCESS && f, "Missing layer function");
         return reinterpret_cast<T>(f);
     }
-    Layer(bool menu = false) {
+    Layer(bool menu = false, std::vector<const char*> extensions = {}, XrResult expected = XR_SUCCESS) {
         module = LoadLibraryW(L"CheekyOpenXRLayer.dll"); require(module != nullptr, "Missing layer DLL");
         const auto negotiate = reinterpret_cast<PFN_xrNegotiateLoaderApiLayerInterface>(GetProcAddress(module, "xrNegotiateLoaderApiLayerInterface"));
         XrNegotiateLoaderInfo loader{};
@@ -139,7 +161,10 @@ struct Layer {
         XrApiLayerNextInfo next{}; next.nextGetInstanceProcAddr = Runtime::get; next.nextCreateApiLayerInstance = Runtime::create;
         XrApiLayerCreateInfo layer{}; layer.nextInfo = &next;
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
-        require(request.createApiLayerInstance(&info, &layer, &instance) == XR_SUCCESS, "Create instance failed");
+        info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        info.enabledExtensionNames = extensions.data();
+        require(request.createApiLayerInstance(&info, &layer, &instance) == expected, "Unexpected create instance result");
+        if (XR_FAILED(expected)) return;
         XrSessionCreateInfo create{XR_TYPE_SESSION_CREATE_INFO}; create.systemId = 1;
         struct MockD3D11Binding { XrStructureType type; const void* next; void* device; };
         const MockD3D11Binding graphics{XR_TYPE_GRAPHICS_BINDING_D3D11_KHR, nullptr, nullptr};
@@ -186,16 +211,101 @@ struct Layer {
         require(fn<PFN_xrSyncActions>("xrSyncActions")(session, &info) == XR_SUCCESS, "Host sync failed");
     }
     ~Layer() {
-        fn<PFN_xrDestroySession>("xrDestroySession")(session);
-        fn<PFN_xrDestroyInstance>("xrDestroyInstance")(instance);
+        if (session) fn<PFN_xrDestroySession>("xrDestroySession")(session);
+        if (instance) fn<PFN_xrDestroyInstance>("xrDestroyInstance")(instance);
         FreeLibrary(module);
     }
 };
 bool valid(const CheekyGazeSnapshotV1& s) { return (s.status_flags & CHEEKY_GAZE_STATUS_GAZE_VALID) != 0; }
+std::string read_file(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
 }
 int run_openxr_input_tests() {
     HMODULE realvr{};
     try {
+        // Exercise the actual DLL against a lower layer unable to enumerate
+        // extensions before creation, including runtimes without gaze support.
+        for (unsigned failure = 0; failure <= 3; ++failure) {
+            for (bool gaze : {false, true}) {
+                Runtime::reset(); Runtime::probe_failure = failure; Runtime::extension = gaze;
+                const auto log_start = read_file(cheeky::openxr_startup_log_path()).size();
+                Layer layer(false, {"XR_TEST_host_extension"});
+                const auto attempts = failure && !gaze ? 2U : 1U;
+                require(Runtime::create_requests.size() == attempts, "Incorrect extension retry count");
+                for (const auto& names : Runtime::create_requests) {
+                    require(names.front() == "XR_TEST_host_extension", "Retry lost an application extension");
+                    require(std::find(names.begin(), names.end(), XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME) == names.end(),
+                        "Unknown cylinder support must use the existing menu fallback");
+                }
+                require(Runtime::injected == gaze, "Successful instance has incorrect gaze extension state");
+                const auto host = layer.create_host_set();
+                require(layer.attach(host) == XR_SUCCESS, "Probe regression host attachment failed");
+                layer.sync(host);
+                const auto snapshot = layer.locate(1);
+                require(valid(snapshot) == gaze, "Unanswered probe must restore functional gaze when supported");
+                require(bool(snapshot.status_flags & CHEEKY_GAZE_STATUS_EXTENSION_ENABLED) == gaze,
+                    "Published extension state must describe the successful attempt");
+                const auto log = read_file(cheeky::openxr_startup_log_path()).substr(log_start);
+                const auto availability = failure ? "unknown" : gaze ? "present" : "absent";
+                require(log.find(std::string("availability=") + availability) != std::string::npos,
+                    "Persistent log missing probe outcome");
+                require(log.find("instance_create end result=0 gaze_enabled=" + std::to_string(gaze)) != std::string::npos,
+                    "Persistent log missing final gaze state");
+                require((log.find("attempt=2 result=0") != std::string::npos) == (attempts == 2),
+                    "Persistent log missing or inventing retry history");
+                if (failure) {
+                    const auto stage = failure == 1 ? "lookup" : failure == 2 ? "count" : "list";
+                    const auto error = failure == 1 ? XR_ERROR_FUNCTION_UNSUPPORTED : XR_ERROR_RUNTIME_FAILURE;
+                    require(log.find(std::string("stage=") + stage + " result=" + std::to_string(error)) != std::string::npos,
+                        "Persistent log missing failed probe stage/result");
+                }
+            }
+        }
+        Runtime::reset(); Runtime::probe_failure = 1; Runtime::supported = false;
+        {
+            Layer layer;
+            require(!valid(layer.locate(1)), "Speculative extension must not invent system eye tracking support");
+        }
+        for (bool gaze : {false, true}) {
+            Runtime::reset(); Runtime::probe_failure = 1; Runtime::extension = gaze;
+            Layer layer(false, {XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME},
+                gaze ? XR_SUCCESS : XR_ERROR_EXTENSION_NOT_PRESENT);
+            require(Runtime::create_requests.size() == 1 && Runtime::create_requests[0].size() == 1,
+                "Application gaze extension must not be duplicated or removed");
+        }
+        for (const auto error : {XR_ERROR_RUNTIME_FAILURE, XR_ERROR_EXTENSION_NOT_PRESENT}) {
+            Runtime::reset(); Runtime::create_result = error;
+            Runtime::probe_failure = error == XR_ERROR_RUNTIME_FAILURE ? 1U : 0U;
+            Layer layer(false, {}, error);
+            require(Runtime::create_requests.size() == 1, "Only an unknown extension rejection may retry");
+        }
+        Runtime::reset(); Runtime::probe_failure = 1; Runtime::create_result = XR_ERROR_EXTENSION_NOT_PRESENT;
+        {
+            const auto log_start = read_file(cheeky::openxr_startup_log_path()).size();
+            Layer layer(false, {"XR_TEST_host_extension"}, XR_ERROR_EXTENSION_NOT_PRESENT);
+            require(Runtime::create_requests.size() == 2 && Runtime::create_requests.back().size() == 1,
+                "Failed retry must propagate without dropping host extensions or retrying indefinitely");
+            const auto log = read_file(cheeky::openxr_startup_log_path()).substr(log_start);
+            require(log.find("instance_create end result=" + std::to_string(XR_ERROR_EXTENSION_NOT_PRESENT) +
+                " gaze_enabled=0 cylinder_enabled=0") != std::string::npos,
+                "Failed instance creation must remain available in the persistent log");
+        }
+        Runtime::reset(); Runtime::cylinder = true;
+        {
+            Layer layer;
+            require(Runtime::create_requests[0].size() == 2, "Confirmed cylinder support must remain enabled");
+        }
+        for (auto host : {CheekyRuntimeHost::uevr, CheekyRuntimeHost::standalone, CheekyRuntimeHost::optiscaler}) {
+            const auto directory = std::filesystem::current_path() / "build" / "issue42-support-tests";
+            const auto zip = cheeky::foveated_dlss::create_runtime_support_bundle(directory, "{}", "", "test", host);
+            const auto contents = read_file(zip);
+            require(contents.find("CheekyOpenXR-startup.log") != std::string::npos &&
+                contents.find("availability=unknown") != std::string::npos &&
+                contents.find("attempt=2 result=") != std::string::npos,
+                "Support ZIP must contain the persistent OpenXR startup history");
+        }
         // Controller rays must resolve to the same pixels on native cylinders
         // and on the quad-strip fallback, including non-divisible texture widths.
         for (bool cylinder : {false, true}) {

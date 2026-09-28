@@ -4,8 +4,10 @@
 #include "runtime_host_api.hpp"
 #include <Windows.h>
 #include <sstream>
+#include <string_view>
 #include <atomic>
 #include "support_external_settings.hpp"
+#include "openxr_startup_log.hpp"
 
 namespace cheeky::foveated_dlss {
 inline std::string path_utf8(const std::filesystem::path& path) {
@@ -60,8 +62,10 @@ inline std::filesystem::path create_runtime_support_bundle(const std::filesystem
     std::vector<const char*> logs{runtime_log_filename(host)};
     if (host == CheekyRuntimeHost::uevr) { logs.push_back("log.txt"); logs.push_back("config.txt"); }
     else logs.push_back("CheekyFoveatedDLSS-Host.log");
+    logs.push_back("CheekyOpenXR-startup.log");
     for (const auto* log_name : logs) {
-        const auto source = directory / log_name;
+        const auto source = std::string_view(log_name) == "CheekyOpenXR-startup.log" ?
+            cheeky::openxr_startup_log_path() : directory / log_name;
         const auto file = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) { manifest << log_name << ": unavailable (Windows error " << GetLastError() << ")\n"; continue; }
