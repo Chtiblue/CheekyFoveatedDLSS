@@ -137,6 +137,15 @@ void verify_libovr(unsigned mode, HMODULE libovr, HMODULE pvr, CheekyRuntimeSnap
     frames(5);
     require(contains(state(), "\"gaze_valid\":false"), "PVR samples without a timestamp are invalid");
     proc<void(*)(float, float, bool)>(pvr, "CheekyFakePVR_SetGaze")(0.2F, -0.1F, true);
+    const auto set_clock = proc<void(*)(unsigned)>(pvr, "CheekyFakePVR_SetClockMode");
+    set_clock(2); frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "Non-finite PVR timestamps must not supply gaze");
+    set_clock(0); frames(5);
+    require(contains(state(), "\"gaze_valid\":true"), "Valid PVR timestamps recover gaze");
+    set_clock(1); Sleep(220); frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "Frozen PVR timestamps expire");
+    set_clock(0); frames(5);
+    require(contains(state(), "\"gaze_valid\":true"), "Advancing PVR timestamps recover after a stall");
     const auto references = proc<References>(libovr, "CheekyFakeLibOVR_References");
     for (auto* chain : chains)
         for (int index = 0; index < 3; ++index)

@@ -141,7 +141,10 @@ inline bool libovr_eye_rotations(const std::array<libovr::Posef, 2>& poses, floa
 // gaze interaction reports it. Components follow OpenVR/OpenXR axes (y up, -z
 // forward), which PVR's tangents already use.
 [[nodiscard]] inline bool pvr_combined_gaze_ray(const pvr::EyeTrackingInfo& info, float ray[3]) noexcept {
-    if (info.TimeInSeconds == 0) return false;
+    if (!std::isfinite(info.TimeInSeconds) || info.TimeInSeconds <= 0) return false;
+    for (const auto& eye : info.GazeTan)
+        if (!std::isfinite(eye.x) || !std::isfinite(eye.y) || std::abs(eye.x) > 10.F || std::abs(eye.y) > 10.F)
+            return false;
     const float x = (info.GazeTan[0].x + info.GazeTan[1].x) * .5F;
     const float y = (info.GazeTan[0].y + info.GazeTan[1].y) * .5F;
     if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) > 10.F || std::abs(y) > 10.F) return false;

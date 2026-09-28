@@ -438,7 +438,11 @@ void publish_frame(ovr::Session value, const LibOVRProjection& projection, ovr::
     calibration.end(calibration_bridge(), regions, released, usable);
     // Arm the next interval only when this frame showed a capturable D3D11
     // projection; otherwise sources would be stamped with nothing to read back.
-    if (api == 12) eye_calibration_unsupported_submit();
+    if (api == 12) {
+        // Never open an interval for an unsupported path or invalidate
+        // another runtime's calibration while reporting it.
+        eye_calibration_unsupported_submit(EyeCalibrationBackend::libovr, current_generation);
+    }
     else if (api == 11 && projection.valid) calibration.begin(calibration_bridge(), current_generation, 11);
 }
 

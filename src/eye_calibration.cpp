@@ -1414,8 +1414,11 @@ bool eye_calibration_frame(EyeCalibrationBackend backend, std::uint64_t session_
     const auto now = GetTickCount64();
     // OpenComposite can expose both APIs. Preserve the working OpenVR route,
     // and never mix its stamps/readbacks with an inner OpenXR frame.
-    if (backend == EyeCalibrationBackend::openxr && s.last_openvr_ms && now - s.last_openvr_ms <= 1000)
+    if (eye_calibration_frame_loop(backend) && s.last_openvr_ms && now - s.last_openvr_ms <= 1000)
         return false;
+    // LibOVR observation must not steal an active OpenXR calibration either.
+    if (backend == EyeCalibrationBackend::libovr && s.backend == EyeCalibrationBackend::openxr &&
+        s.last_frame_ms && now - s.last_frame_ms <= 1000) return false;
     if (backend == EyeCalibrationBackend::openvr)
         s.last_openvr_ms = now;
     if (s.backend != backend || s.session_generation != session_generation) {
@@ -2083,11 +2086,13 @@ void eye_calibration_result(std::uint64_t ticket, int result, unsigned physical_
             calibration_image_physical_eye(f.support, 2 + unsigned(ticket & 1), f.physical_eyes[ticket & 1]);
         }
 }
-void eye_calibration_unsupported_submit() noexcept {
+void eye_calibration_unsupported_submit(EyeCalibrationBackend backend, std::uint64_t session_generation) noexcept {
     if (!enabled)
         return;
     auto& s = state();
     std::lock_guard lock(s.mutex);
+    if (backend != EyeCalibrationBackend::none &&
+        (s.backend != backend || s.session_generation != session_generation)) return;
     s.unsupported_submission = true;
     ++s.stats.unsupported_submissions;
     if (s.current >= 0)

@@ -4,6 +4,7 @@
 #include "runtime.hpp"
 #include "openvr_gaze.hpp"
 #include "libovr_gaze.hpp"
+#include "native_gaze_selection.hpp"
 #include "afw_gaze.hpp"
 
 #include <Windows.h>
@@ -130,15 +131,21 @@ std::uint64_t qpc_frequency{};
     return diagnostics.abi_compatible;
 }
 
-// In-process adapters publish only while their runtime submits frames. If both
-// are present, follow the most recent publication.
+// Prefer usable data; preserve OpenVR on equal quality to avoid switching
+// sources (and resetting temporal history) every time publication order changes.
 constexpr std::uint32_t native_gaze_sources = CHEEKY_GAZE_STATUS_OPENVR | CHEEKY_GAZE_STATUS_LIBOVR;
 [[nodiscard]] bool read_native_gaze(const Settings& settings, IUnknown* const resource,
-    CheekyGazeSnapshotV1& snapshot, const std::uint64_t native_identity = 0) noexcept {
+    CheekyGazeSnapshotV1& snapshot, const std::uint64_t native_identity = 0,
+    const DlssViewId view_id = 0) noexcept {
     const bool openvr = read_openvr_gaze(settings, resource, snapshot, native_identity);
     CheekyGazeSnapshotV1 libovr{};
     if (!read_libovr_gaze(settings, resource, libovr, native_identity)) return openvr;
-    if (!openvr || libovr.publication_qpc > snapshot.publication_qpc) snapshot = libovr;
+    const auto identity = native_identity ? native_identity : canonical_identity(resource);
+    const auto assignment = stereo_eye_assignment(view_id);
+    const auto now = qpc_now();
+    const bool gaze = settings.center_mode != FoveationCenterMode::fixed;
+    if (!openvr || native_gaze_quality(libovr, identity, assignment, now, qpc_frequency, gaze) >
+        native_gaze_quality(snapshot, identity, assignment, now, qpc_frequency, gaze)) snapshot = libovr;
     return true;
 }
 
@@ -266,7 +273,7 @@ bool calculate_afw_crop(const Settings& settings, DlssViewId view_id, IUnknown* 
     CheekyGazeSnapshotV1 snapshot{};
     bool loaded = supplied ? (snapshot = *supplied, snapshot.abi_version == CHEEKY_GAZE_ABI_VERSION && snapshot.structure_size >= sizeof(snapshot))
         : load_snapshot(snapshot);
-    if (!supplied && (!loaded || !snapshot.session_generation)) loaded = read_native_gaze(settings, output, snapshot);
+    if (!supplied && (!loaded || !snapshot.session_generation)) loaded = read_native_gaze(settings, output, snapshot, 0, view_id);
     bool projection_changed{};
     for (unsigned eye = 0; eye < 2; ++eye) projection_changed |= !gaze_projection_matches(afw.projections[eye], projection.projections[eye]);
     const bool mode_changed = afw.configured && (afw.mode != static_cast<unsigned>(settings.center_mode) || afw.pattern != settings.simulation_pattern);
@@ -568,7 +575,7 @@ bool calculate_coordinated_crop(
             snapshot.structure_size >= sizeof(snapshot))
         : load_snapshot(snapshot);
     if (!supplied_snapshot && (!loaded || snapshot.session_generation == 0U)) {
-        if (read_native_gaze(settings, output_resource, snapshot, native_resource_identity)) {
+        if (read_native_gaze(settings, output_resource, snapshot, native_resource_identity, view_id)) {
             loaded = true;
             diagnostics.layer_present = true; // Runtime adapter present; UI labels this generically.
             diagnostics.abi_compatible = true;

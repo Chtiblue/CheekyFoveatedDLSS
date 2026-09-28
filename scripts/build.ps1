@@ -72,6 +72,10 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
+& $testExecutable --libovr-policy
+if ($LASTEXITCODE -ne 0) { throw "LibOVR source arbitration and calibration ownership tests failed." }
+& $testExecutable --libovr-transfer
+if ($LASTEXITCODE -ne 0) { throw "LibOVR D3D11/D3D12 source transfer tests failed." }
 & $testExecutable --calibration-incomplete
 if ($LASTEXITCODE -ne 0) { throw "Incomplete corner calibration escalation test failed." }
 & $testExecutable --rr-contract

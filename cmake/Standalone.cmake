@@ -132,6 +132,7 @@ set_target_properties(CheekyFakePVR PROPERTIES OUTPUT_NAME "LibPVRClient64")
 add_dependencies(CheekyRuntimeHostTests CheekyFakeLibOVR CheekyFakePVR)
 foreach(mode libovr libovr-legacy libovr-late libovr-borrowed libovr-copied-table)
     add_test(NAME CheekyRuntimeStandalone-${mode} COMMAND CheekyRuntimeHostTests --${mode})
+    add_test(NAME CheekyRuntimeOptiScaler-${mode} COMMAND CheekyRuntimeHostTests --optiscaler --${mode})
 endforeach()
 
 if(CHEEKY_BUILD_UEVR)

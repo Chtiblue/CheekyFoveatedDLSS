@@ -255,8 +255,10 @@ Eye tracking details > LibOVR runtime** in the F8 menu: **Game PVR session found
 and **Eye tracker supplying gaze** should both read Yes, even with **Fixed**
 placement selected. Eye calibration reports the **LibOVR** backend.
 
-Limits: eye calibration supports D3D11 LibOVR swap chains; D3D12 LibOVR games get
-gaze and alignment, but calibration reports an unsupported submission. The
+Limits: eye calibration supports D3D11 LibOVR swap chains, including D3D12
+rendering transferred into those D3D11 textures. Native D3D12 LibOVR swap-chain
+calibration is unsupported; gaze and alignment still depend on usable mapping.
+Vulkan-to-LibOVR support has not been validated and is deferred. The
 Oculus runtime itself (for example Quest through Link) exposes no eye tracking to
 LibOVR; such games get alignment and calibration only. A PVR client that is not
 already loaded by the game's runtime is never used.

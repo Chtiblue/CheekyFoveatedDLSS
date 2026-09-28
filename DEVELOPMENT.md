@@ -47,6 +47,22 @@ Lua tests require `lupa==2.8`, installed in the Python environment or `build/tes
 
 GPU and host tests complement game/headset testing; they do not establish compatibility or performance in every game.
 
+`CheekyTests --libovr-policy` checks mixed OpenVR/LibOVR gaze selection,
+invalid PVR samples and calibration ownership across OpenVR, OpenXR and LibOVR.
+`CheekyTests --libovr-transfer` checks retained calibration with both D3D11
+and D3D12 sources feeding LibOVR D3D11 submissions. These checks do not add
+native LibOVR D3D12 swap-chain calibration. Vulkan work is deferred: no new
+Vulkan implementation or Vulkan validation is included in this follow-up.
+
+The focused LibOVR tests are not a claim that the complete suite is green.
+The retained-calibration matrix has acquisition failures on the existing
+OpenXR path and the added LibOVR D3D12-to-D3D11 case. The latter showed repeated
+ambiguous grid-marker matches during resize reacquisition. Acquisition failures
+print the API/backend, geometry and calibration diagnostics; do not assume the
+10-second deadline means GPU load.
+The UEVR default and `--dx11` checks also currently fail at
+"Calibration policy must reach the shared runtime" on the validation machine.
+
 `CheekyRuntimeHostTests --libovr` (also `--libovr-legacy`, `--libovr-late`,
 `--libovr-borrowed` and `--libovr-copied-table`) loads synthetic
 `LibOVRRT64_1.dll` and `LibPVRClient64.dll` fixtures before the runtime, as a

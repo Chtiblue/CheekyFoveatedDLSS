@@ -1790,6 +1790,11 @@ void retained_calibration(bool source12, bool submit11, EyeCalibrationBackend ba
     auto acquire = [&] {
         const auto deadline = GetTickCount64() + 10000;
         do { frame(); } while ((!eye_calibration_stats().crop_mapping_active || eye_calibration_stats().acquisition_confirmations < 1) && GetTickCount64() < deadline);
+        if (!eye_calibration_stats().crop_mapping_active)
+            std::cerr << "Retained acquisition " << (source12 ? "DX12" : "DX11") << " -> " <<
+                (submit11 ? "DX11 " : "DX12 ") << eye_calibration_backend_name(backend) <<
+                " width=" << source_width << " bound=" << right_bound << " swapped=" << swapped <<
+                " alternating=" << alternating_sources << '\n' << eye_calibration_json() << '\n';
         require(eye_calibration_stats().crop_mapping_active, "Change-only calibration must acquire and publish a crop");
         for (unsigned i = 0; i < 12; ++i) frame(true);
     };
@@ -1858,9 +1863,21 @@ int run_retained_calibration_tests() {
         retained_calibration(true, true, EyeCalibrationBackend::openxr);
         // LibOVR (D3D11 swap chains) follows the OpenXR frame-loop policy.
         retained_calibration(false, true, EyeCalibrationBackend::libovr);
+        retained_calibration(true, true, EyeCalibrationBackend::libovr);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Retained calibration: " << e.what() << '\n'; cleanup();
+        auto settings = configured_settings(); settings.eye_calibration_continuous = true; update_settings(settings);
+        unregister_stereo_view(9103); return 1;
+    }
+}
+int run_libovr_transfer_tests() {
+    try {
+        retained_calibration(false, true, EyeCalibrationBackend::libovr);
+        retained_calibration(true, true, EyeCalibrationBackend::libovr);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "LibOVR transfer calibration: " << e.what() << '\n'; cleanup();
         auto settings = configured_settings(); settings.eye_calibration_continuous = true; update_settings(settings);
         unregister_stereo_view(9103); return 1;
     }

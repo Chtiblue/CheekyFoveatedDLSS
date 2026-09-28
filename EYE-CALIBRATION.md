@@ -76,6 +76,12 @@ is the image release where patches are captured, and `ovr_EndFrame` (or
 layer. It is built into the add-on, plugin and standalone runtime; no layer is
 installed. Layers with a bottom-left texture origin are not used.
 
+The LibOVR column describes the submitted swap-chain API. D3D12-rendered
+sources transferred into D3D11 LibOVR swap chains use the existing mixed-API
+calibration path; this is distinct from native D3D12 LibOVR submissions.
+Vulkan-to-LibOVR and native Vulkan LibOVR submissions have not been validated;
+Vulkan support work is deferred.
+
 The same calibration core is shared by ReShade, UEVR, standalone and OptiScaler. Native OpenXR needs the
 **matching updated Cheeky OpenXR layer** installed using
 `CheekyOpenXRSetup.exe`, in addition to the new add-on or plugin/runtime.

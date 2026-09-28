@@ -105,5 +105,6 @@ std::uint64_t eye_calibration_submit12(ID3D12Resource*, ID3D12CommandQueue*, uns
                                        EyeCalibrationBackend backend = EyeCalibrationBackend::openvr,
                                        std::uint64_t session_generation = 0) noexcept;
 void eye_calibration_result(std::uint64_t, int, unsigned physical_eye = ~0U) noexcept;
-void eye_calibration_unsupported_submit() noexcept;
+void eye_calibration_unsupported_submit(EyeCalibrationBackend backend = EyeCalibrationBackend::none,
+    std::uint64_t session_generation = 0) noexcept;
 } // namespace cheeky::foveated_dlss

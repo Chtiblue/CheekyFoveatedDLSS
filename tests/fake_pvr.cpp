@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 // Pimax PVR client fixture (libPVRClient64.dll). The interface table lives in
 // this DLL and the LibOVR fixture calls through it, like Pimax's runtime does.
@@ -12,6 +13,7 @@ struct EyeTrackingInfo { Vector2f gaze[2]; double time; float convergence; float
 int hmd_storage{};
 std::atomic<unsigned> end_frames{}, tracking_queries{}, eye_queries{}, destroyed{};
 std::atomic<bool> valid{true};
+std::atomic<unsigned> clock_mode{}; // 0 advancing, 1 frozen, 2 NaN
 float gaze_x{0.2F}, gaze_y{-0.1F};
 double sample_time{};
 __declspec(noinline) int create_hmd(void** hmd) { *hmd = &hmd_storage; return 0; }
@@ -25,9 +27,9 @@ __declspec(noinline) int eye_tracking(void* hmd, double, EyeTrackingInfo* info) 
     if (hmd != &hmd_storage || !info) return -1;
     *info = {};
     if (!valid) return 0;
-    sample_time += 0.004;
+    if (clock_mode == 0) sample_time += 0.004;
     info->gaze[0] = info->gaze[1] = {gaze_x, gaze_y};
-    info->time = sample_time;
+    info->time = clock_mode == 2 ? std::numeric_limits<double>::quiet_NaN() : sample_time;
     return 0;
 }
 struct Table { void* slots[66]; } table = [] {
@@ -46,6 +48,7 @@ extern "C" __declspec(dllexport) void* getPvrInterface(std::uint32_t major, std:
     return major == 1 && minor >= 20 && minor <= 32 ? &table : nullptr;
 }
 extern "C" __declspec(dllexport) void CheekyFakePVR_SetGaze(float x, float y, bool value) { gaze_x = x; gaze_y = y; valid = value; }
+extern "C" __declspec(dllexport) void CheekyFakePVR_SetClockMode(unsigned mode) { clock_mode = mode; }
 extern "C" __declspec(dllexport) unsigned CheekyFakePVR_EndFrames() { return end_frames.load(); }
 extern "C" __declspec(dllexport) unsigned CheekyFakePVR_EyeQueries() { return eye_queries.load(); }
 extern "C" __declspec(dllexport) unsigned CheekyFakePVR_Destroyed() { return destroyed.load(); }
