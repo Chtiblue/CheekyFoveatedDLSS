@@ -210,13 +210,35 @@ void record(ID3D12GraphicsCommandList* list, const GazeCopyEdge& edge) {
         ++copies;
     }
 }
+// A list with neither a calibration nor a DLSS-NR identity has nothing for the
+// execution mutex to order: its submitted/retired bookkeeping is a no-op. Such
+// lists must not wait for that mutex. The hooks patch D3D12Core itself, so they
+// also see every other D3D12 user in the process - an OpenXR layer's private
+// device, D3D11On12 - and a game thread can hold the mutex across a forwarding
+// wrapper's Execute that blocks on exactly such a thread (R.E.A.L. VR waits for
+// its VR thread there). Identities are private data, tagged while recording and
+// kept across Reset, so a closed or resetting list reads them without a lock.
+bool tracked(ID3D12GraphicsCommandList* list) noexcept {
+    return nr_recording_tagged(list) || calibration12_tagged(list);
+}
+bool any_tracked(UINT count, ID3D12CommandList* const* lists) noexcept {
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<ID3D12GraphicsCommandList> graphics;
+        if (lists[i] && SUCCEEDED(lists[i]->QueryInterface(IID_PPV_ARGS(&graphics))) && tracked(graphics.Get()))
+            return true;
+    }
+    return false;
+}
 void execute(ExecuteFn real_execute, ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists) {
     ObservationScope scope;
     if (calibration12_internal_work() || !scope.outer || !ready || !lists) {
         real_execute(queue, count, lists);
         return;
     }
-    {
+    const bool tracked_submission = any_tracked(count, lists);
+    if (!tracked_submission) {
+        real_execute(queue, count, lists);
+    } else {
         std::lock_guard execution_lock(calibration12_execution_mutex());
         real_execute(queue, count, lists);
         for (UINT i = 0; i < count; ++i) {
@@ -243,7 +265,14 @@ void execute(ExecuteFn real_execute, ID3D12CommandQueue* queue, UINT count, ID3D
         // Collect only uses already associated with their actual executing
         // queue. The legacy present-queue fallback could otherwise signal
         // timings recorded on a different, not-yet-submitted command list.
-        note_d3d12_present(nullptr);
+        // Collection takes the execution mutex; an untracked submission only
+        // collects when nobody holds it, and otherwise leaves it to the next.
+        if (tracked_submission) {
+            note_d3d12_present(nullptr);
+        } else if (std::unique_lock collect_lock(calibration12_execution_mutex(), std::try_to_lock);
+                   collect_lock.owns_lock()) {
+            note_d3d12_present(nullptr);
+        }
     } catch (...) {
         log_warning("Native D3D12 submission observation failed");
     }
@@ -254,7 +283,9 @@ HRESULT reset(ResetFn real_reset, ID3D12GraphicsCommandList* list, ID3D12Command
     if (calibration12_internal_work() || !scope.outer || !ready)
         return real_reset(list, allocator, state);
     HRESULT hr;
-    {
+    if (!tracked(list)) {
+        hr = real_reset(list, allocator, state);
+    } else {
         std::lock_guard execution_lock(calibration12_execution_mutex());
         hr = real_reset(list, allocator, state);
         if (SUCCEEDED(hr)) {
@@ -365,7 +396,7 @@ bool initialize_native_observer(ID3D12Device* device, ID3D12CommandQueue* queue)
     }
     ready = true;
     if (before != method_count)
-        trace_event("D3D12 observer family ready methods=%zu execute=%p reset=%p copy=%p texture=%p resolve=%p",
+        trace_event("D3D12 observer family ready methods=%zu execute=%p reset=%p copy=%p texture=%p resolve=%p untracked_unlocked=1",
             method_count, targets[0], targets[1], targets[2], targets[3], targets[4]);
     return true;
 }

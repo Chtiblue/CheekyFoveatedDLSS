@@ -13,6 +13,8 @@ using NrSignal = HRESULT (*)(ID3D12CommandQueue*, ID3D12Fence*, std::uint64_t);
 bool ensure_dlss_nr_recording(ID3D12GraphicsCommandList*) noexcept;
 void nr_recording_submitted(ID3D12CommandQueue*, ID3D12Object*, NrSignal = nullptr) noexcept;
 void nr_recording_reset(ID3D12Object*, HRESULT reset_result) noexcept;
+// Whether the list has ever carried a DLSS-NR recording. Private data only, no lock.
+bool nr_recording_tagged(ID3D12Object*) noexcept;
 
 // Resources belong to recordings, not their first execution. A use drains only
 // after successful Reset/destruction and completion on every executing queue.
