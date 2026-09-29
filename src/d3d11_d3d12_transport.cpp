@@ -12,6 +12,7 @@
 #include <d3d11_4.h>
 #include "d3d_shaders.hpp"
 #include "crop_motion.hpp"
+#include "transport_geometry.hpp"
 #include <dxgi1_4.h>
 
 #include <algorithm>
@@ -95,28 +96,6 @@ void release(T*& value) noexcept {
     const std::uint32_t capacity
 ) noexcept {
     return base <= capacity && size <= capacity - base;
-}
-
-struct ScaledRange {
-    std::uint32_t base{};
-    std::uint32_t extent{};
-};
-
-[[nodiscard]] ScaledRange scale_range(
-    const std::uint32_t base,
-    const std::uint32_t extent,
-    const std::uint32_t source_extent,
-    const std::uint32_t output_extent
-) noexcept {
-    const auto scaled_base = static_cast<std::uint32_t>(
-        static_cast<std::uint64_t>(base) * source_extent / output_extent
-    );
-    const auto scaled_end = static_cast<std::uint32_t>((std::min)(
-        static_cast<std::uint64_t>(source_extent),
-        (static_cast<std::uint64_t>(base + extent) * source_extent +
-            output_extent - 1U) / output_extent
-    ));
-    return {scaled_base, (std::max)(1U, scaled_end - scaled_base)};
 }
 
 struct InitContract {
@@ -1659,6 +1638,17 @@ bool evaluate_d3d11_via_d3d12(
             nr_processing_height
         )
         : ScaledRange{};
+    // Rounding makes these extents vary by a pixel as foveated NR follows
+    // gaze. Size the shared guides by position-independent bounds; recreating
+    // them every frame churns kernel allocations.
+    const auto nr_depth_capacity_x = settings.nr_enabled
+        ? scaled_capacity(nr_geometry.width, render_width, nr_processing_width) : 0U;
+    const auto nr_depth_capacity_y = settings.nr_enabled
+        ? scaled_capacity(nr_geometry.height, render_height, nr_processing_height) : 0U;
+    const auto nr_mv_capacity_x = settings.nr_enabled
+        ? scaled_capacity(nr_geometry.width, nr_motion_width, nr_processing_width) : 0U;
+    const auto nr_mv_capacity_y = settings.nr_enabled
+        ? scaled_capacity(nr_geometry.height, nr_motion_height, nr_processing_height) : 0U;
     if (!in_bounds(mv_x + mv_crop_x, mv_width, motion_desc.Width) ||
         !in_bounds(mv_y + mv_crop_y, mv_height, motion_desc.Height) ||
         (settings.peripheral_dlaa_enabled && (
@@ -1758,18 +1748,18 @@ bool evaluate_d3d11_via_d3d12(
     resolve_timing(context, slot);
     resolve_dlss_timing(*device, slot);
     if (!slot_matches(
-            slot, reconstruction, mv_width, mv_height, nr_depth_x.extent, nr_depth_y.extent,
+            slot, reconstruction, mv_width, mv_height, nr_depth_capacity_x, nr_depth_capacity_y,
             nr_geometry.width, nr_geometry.height,
-            nr_mv_region_x.extent, nr_mv_region_y.extent, settings.nr_enabled,
+            nr_mv_capacity_x, nr_mv_capacity_y, settings.nr_enabled,
             render_width, render_height,
             peripheral_dimensions.width, peripheral_dimensions.height,
             nr_motion_width, nr_motion_height,
             settings.peripheral_dlaa_enabled,
             color_desc.Format, motion_desc.Format, output_desc.Format, nr_before
         ) && !initialize_slot(
-            *device, slot, reconstruction, mv_width, mv_height, nr_depth_x.extent, nr_depth_y.extent,
+            *device, slot, reconstruction, mv_width, mv_height, nr_depth_capacity_x, nr_depth_capacity_y,
             nr_geometry.width, nr_geometry.height,
-            nr_mv_region_x.extent, nr_mv_region_y.extent,
+            nr_mv_capacity_x, nr_mv_capacity_y,
             settings.nr_enabled,
             render_width, render_height,
             peripheral_dimensions.width, peripheral_dimensions.height,

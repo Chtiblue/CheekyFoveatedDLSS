@@ -21,6 +21,7 @@
 #include "openvr_gaze_math.hpp"
 #include "libovr_gaze.hpp"
 #include "libovr_gaze_math.hpp"
+#include "transport_geometry.hpp"
 #include "native_gaze_selection.hpp"
 #include "eye_calibration.hpp"
 #include "openvr_menu.hpp"
@@ -1742,6 +1743,36 @@ void test_openvr_geometry() {
     expect_near(u,(1.F+std::tan(0.2F))*0.5F,0.0001F,"inverse eye rotation projects head forward");
 }
 
+// Foveated NR moves its 8-pixel-aligned output region with gaze. BG3 (render
+// 5216, output 7824) mapped a 1728-pixel region to 1152 or 1153 render pixels
+// by position, and the DX11 transport re-created shared guide textures on every
+// change until the system bugchecked. Guides are sized by scaled_capacity().
+void test_transport_guide_capacity() {
+    using namespace cheeky::foveated_dlss;
+    const auto sweep = [](std::uint32_t extent, std::uint32_t source, std::uint32_t output) {
+        const auto capacity = scaled_capacity(extent, source, output);
+        std::uint32_t smallest = UINT32_MAX, largest = 0;
+        for (std::uint32_t base = 0; base + extent <= output; ++base) {
+            const auto range = scale_range(base, extent, source, output);
+            smallest = (std::min)(smallest, range.extent);
+            largest = (std::max)(largest, range.extent);
+            if (range.extent > capacity || range.base + range.extent > source) return std::pair{smallest, UINT32_MAX};
+        }
+        return std::pair{smallest, largest};
+    };
+    const auto bg3 = sweep(1728, 5216, 7824);
+    expect(bg3.first == 1152 && bg3.second == 1153, "BG3 NR guide extent varies by a pixel with position");
+    expect(scaled_capacity(1728, 5216, 7824) == 1153, "BG3 NR guides allocate once at the largest extent");
+    bool bounded = true;
+    for (const auto [extent, source, output] : {std::array<std::uint32_t, 3>{1080, 3260, 4880},
+            std::array<std::uint32_t, 3>{184, 100, 256}, std::array<std::uint32_t, 3>{128, 128, 256},
+            std::array<std::uint32_t, 3>{256, 256, 256}, std::array<std::uint32_t, 3>{300, 1153, 721},
+            std::array<std::uint32_t, 3>{1, 7, 13}})
+        bounded = bounded && sweep(extent, source, output).second != UINT32_MAX &&
+            scaled_capacity(extent, source, output) <= source;
+    expect(bounded, "Guide capacity bounds every region position and stays within the source");
+}
+
 void test_libovr_geometry() {
     using namespace cheeky::foveated_dlss;
     int chain_a{}, chain_b{}, unknown{};
@@ -2645,10 +2676,15 @@ int run_vulkan_tests(bool real=false, bool integration=false);
 int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--transport-geometry") == 0) {
+        test_transport_guide_capacity();
+        return failures ? 1 : 0;
+    }
     extern int run_calibration_search_tests();
     if (argc == 2 && std::strcmp(argv[1], "--calibration-search") == 0) return run_calibration_search_tests();
     if (argc == 2 && std::strcmp(argv[1], "--libovr-policy") == 0) {
-        test_libovr_geometry(); test_native_gaze_selection(); test_libovr_coordinator();
+        test_libovr_geometry();
+    test_transport_guide_capacity(); test_native_gaze_selection(); test_libovr_coordinator();
         test_libovr_calibration_ownership();
         if (!failures) std::cout << "PASS LibOVR gaze selection, validation and calibration ownership\n";
         return failures ? 1 : 0;
@@ -2729,6 +2765,7 @@ int main(int argc, char** argv) {
     test_packed_alignment_coordinator(true);
     test_openvr_geometry();
     test_libovr_geometry();
+    test_transport_guide_capacity();
     test_libovr_coordinator();
     test_native_gaze_selection();
     test_libovr_calibration_ownership();
