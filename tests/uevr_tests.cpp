@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
         command("1\n81\ncalibration_enable");
         command("1\n82\ncalibration_reset");
         command("1\n86\ncalibration_recalibrate");
-        require(received.find("Waiting for OpenVR or OpenXR") != received.npos, "Unavailable backend must not claim active calibration");
+        require(received.find("Waiting for OpenVR, OpenXR or LibOVR") != received.npos, "Unavailable backend must not claim active calibration");
         if (late) {
             const auto active_hook = higher_hook ? "\"d3d12_lower_hook_active\":false" : "\"d3d12_lower_hook_active\":true";
             require(snapshot(get).find(active_hook) != std::string::npos, "Saved hook path was not applied at startup");
@@ -423,7 +423,10 @@ int main(int argc, char** argv) {
         }
         if (dx11) {
             command("1\n10\nset\nD3D11D3D12Transport=true");
-            require(received.find("transport is unavailable")!=received.npos,"DX11 transport rejected explicitly");
+            require(received.find("Settings applied")!=received.npos,"UEVR accepts DX11 transport");
+            reset(); present();
+            require(snapshot(get).find("\"D3D11D3D12Transport\":true") != std::string::npos,
+                "UEVR graphics recovery preserves transport preference");
             command("1\n11\ndefaults");
             require(received.find("Settings applied")!=received.npos,"DX11 defaults remain usable");
         }
@@ -439,8 +442,8 @@ int main(int argc, char** argv) {
         require(snapshot(get).find("\"ready\":true")!=std::string::npos,"Renderer recovery");
         command("1\n2\nset\nWidth=0.65\nHeight=0.45\nEnabled=false\nEyeCalibrationContinuous=false");
         require(received.find("\"EyeCalibrationContinuous\":false") != received.npos &&
-            received.find("\"continuous_validation\":false") != received.npos,
-            "Calibration policy must reach the shared runtime");
+            received.find("\"continuous_validation\":true") != received.npos,
+            "Auto corner calibration must keep validating while the full-search retention preference is disabled");
         require(std::abs(field(received,"Width")-0.65)<0.0001 && received.find("\"Enabled\":false") != received.npos, "Settings bridge transaction");
         const auto revision=field(received,"revision");
         command("1\n3\nset\nWidth=0.4\nHeight=nan");

@@ -167,7 +167,7 @@ local function reset_group(label, group)
     end
     imgui.end_disabled()
 end
-local alignment = {[0]="Manual fallback", [1]="Streamline projection", [2]="OpenXR", [3]="OpenVR"}
+local alignment = {[0]="Manual fallback", [1]="Streamline projection", [2]="OpenXR", [3]="OpenVR", [4]="LibOVR"}
 
 local function performance(d, f)
     section("Frame rate comparison")
@@ -376,8 +376,10 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
 
     if imgui.tree_node("DLSS-NR (experimental)") then
         if status.renderer == 0 then
-            text("DLSS-NR / DX12 transport is unavailable on the DX11 path in the UEVR plugin.")
-        else
+            check("DX11 -> DX12 transport", "D3D11D3D12Transport")
+            text("DLSS-NR on DX11 requires DX12 transport.")
+        end
+        if status.renderer ~= 0 or draft.D3D11D3D12Transport then
             check("Enable DLSS-NR", "NrEnabled")
             text("Alt+Shift+> (period key): toggle DLSS-NR")
             if draft.NrEnabled then

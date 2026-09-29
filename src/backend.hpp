@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ngx_abi.hpp"
+#include "ngx_evaluation_extent.hpp"
 #include "frame_contract.hpp"
 #include "settings.hpp"
 #include "dlss_nr.hpp"
@@ -80,6 +81,12 @@ void d3d11_set_composite_base(
     ID3D11ShaderResourceView* base_srv,
     std::uint32_t width,
     std::uint32_t height
+) noexcept;
+
+// Output extent observed when the game created this DX11 feature; empty for
+// features adopted after attachment.
+[[nodiscard]] NgxOutputExtent d3d11_game_output_extent(
+    const NgxHandle* game_handle
 ) noexcept;
 
 [[nodiscard]] D3D12Evaluation* prepare_d3d12(

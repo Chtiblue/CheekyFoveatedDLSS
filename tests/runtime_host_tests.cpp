@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -37,6 +38,228 @@ double field(const std::string& text, const char* name) {
     require(pos != std::string::npos, "Missing numeric field");
     return std::stod(text.substr(pos + token.size()));
 }
+// A LibOVR game on Pimax: the runtime (fixture) forwards sessions and frames
+// through an already loaded PVR client (fixture). Cheeky must observe both
+// without initializing either, and read gaze from the game's own PVR session.
+// Modes: 1 current SDK, 2 missed ovr_Initialize with pre-1.25 layers, 3 runtime
+// returning borrowed swap-chain image references, 4 runtime using its own copy
+// of the PVR interface table, 5 missed ovr_Initialize with 1.25+ layers.
+void verify_libovr(unsigned mode, HMODULE libovr, HMODULE pvr, CheekyRuntimeSnapshotFn get,
+    CheekyRuntimeCommandFn command, std::uint64_t attachment) {
+    const bool initialized = mode != 2 && mode != 5;
+    const auto state = [&] {
+        const auto text = snapshot(get);
+        const auto at = text.find("\"libovr\":");
+        require(at != std::string::npos, "LibOVR adapter diagnostics in snapshot");
+        return text.substr(at);
+    };
+    for (unsigned i = 0; i < 200 && !contains(state(), "\"client\":true"); ++i) Sleep(25);
+    require(contains(state(), "\"hooked\":true") && contains(state(), "\"client\":true"),
+        "Loaded LibOVR runtime and PVR client observed by their exports");
+    require(contains(state(), "\"interface_minor\":32"), "Newest verified PVR interface selected");
+    ComPtr<ID3D11Device> device;
+    require(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &device, nullptr, nullptr)), "Create WARP D3D11 device");
+    using Initialize = int (*)(const void*);
+    using Create = int (*)(void**, void*);
+    using Destroy = void (*)(void*);
+    using CreateChain = int (*)(void*, IUnknown*, const void*, void**);
+    using DestroyChain = void (*)(void*, void*);
+    using Commit = int (*)(void*, void*);
+    using EndFrame = int (*)(void*, long long, const void*, const void* const*, unsigned);
+    using References = unsigned long (*)(void*, int);
+    if (mode == 3) proc<void(*)(bool)>(libovr, "CheekyFakeLibOVR_SetBorrowedBuffers")(true);
+    if (initialized) {
+        const std::uint32_t params[8]{4U /* ovrInit_RequestVersion */, 43U};
+        require(proc<Initialize>(libovr, "ovr_Initialize")(params) == 0, "Initialize LibOVR");
+    }
+    void* session{};
+    require(proc<Create>(libovr, "ovr_Create")(&session, nullptr) == 0 && session, "Create LibOVR session");
+    const unsigned size[2]{512, 512};
+    std::array<void*, 2> chains{};
+    for (auto& chain : chains)
+        require(proc<CreateChain>(libovr, "ovr_CreateTextureSwapChainDX")(session, device.Get(), size, &chain) == 0,
+            "Create LibOVR D3D11 swap chain");
+    // ovrLayerEyeFov: ColorTexture, Viewport, Fov after a 136-byte header
+    // (SDK 1.25+) or an 8-byte header (older clients).
+    alignas(8) std::array<unsigned char, 320> layer{};
+    const std::size_t header = mode == 2 ? 8 : 136;
+    const std::int32_t type = 1;
+    std::memcpy(layer.data(), &type, sizeof(type));
+    std::memcpy(layer.data() + header, chains.data(), sizeof(void*) * 2);
+    const std::int32_t viewports[8]{0, 0, 512, 512, 0, 0, 512, 512};
+    std::memcpy(layer.data() + header + 16, viewports, sizeof(viewports));
+    const float fovs[8]{1, 1, 1, 1, 1, 1, 1, 1};
+    std::memcpy(layer.data() + header + 48, fovs, sizeof(fovs));
+    // RenderPose[2]: orientation xyzw, position xyz (identity rotations).
+    const float poses[14]{0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0};
+    std::memcpy(layer.data() + header + 80, poses, sizeof(poses));
+    const void* layers[]{layer.data()};
+    const auto commit = proc<Commit>(libovr, "ovr_CommitTextureSwapChain");
+    const auto end_frame = proc<EndFrame>(libovr, mode == 1 ? "ovr_EndFrame" : "ovr_SubmitFrame2");
+    const auto frames = [&](unsigned count) {
+        for (unsigned i = 0; i < count; ++i) {
+            for (auto* chain : chains) require(commit(session, chain) == 0, "Commit LibOVR swap chain");
+            require(end_frame(session, i, nullptr, layers, 1) == 0, "Submit LibOVR frame");
+            Sleep(2);
+        }
+    };
+    frames(60);
+    if (mode == 4) {
+        // Table patches are never called: after ~1 s of frames, the adapter
+        // observes the implementations instead.
+        require(contains(state(), "\"session_captured\":false"), "Copied table hides the session from slot patches");
+        frames(40);
+        for (unsigned i = 0; i < 100 && !contains(state(), "\"session_route\":\"implementation\""); ++i) frames(5);
+    }
+    auto text = state();
+    require(contains(text, mode == 4 ? "\"session_route\":\"implementation\"" : "\"session_route\":\"table\""),
+        "Game PVR session found through the expected route");
+    require(contains(text, "\"session\":true") && contains(text, "\"projection_layers\":1") &&
+        contains(text, "\"submission_api\":11") && field(text, "projection_frames") >= 50,
+        "Stereo projection and D3D11 swap-chain images observed");
+    require(contains(text, mode == 2 ? "\"layout\":\"legacy\"" : "\"layout\":\"current\""),
+        "Layer header layout follows the client's SDK version");
+    require(contains(text, initialized ? "\"requested_minor\":43" : "\"requested_minor\":null"),
+        "Requested LibOVR minor version recorded only when observed");
+    require(proc<bool(*)()>(pvr, "CheekyFakePVR_EndFrameObserved")() &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_EndFrames")() == proc<unsigned(*)()>(libovr, "CheekyFakeLibOVR_Frames")(),
+        "Patched PVR frame slot forwards every call");
+    require(contains(text, "\"submitted_eye_rotation\":true"), "Eye rotations come from submitted render poses");
+    require(contains(text, "\"session_captured\":true") &&
+        contains(text, "\"gaze_valid\":true") && contains(text, "\"gaze_tan\":[0.2,-0.1]") &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_EyeQueries")() > 0,
+        "Gaze read from the game's own PVR session");
+    const auto full = snapshot(get);
+    const auto calibration = full.substr(full.find("\"eye_calibration\":"));
+    require(contains(calibration, "\"backend\":\"LibOVR\"") && field(calibration, "frames") >= 50,
+        "LibOVR frames drive eye calibration");
+    proc<void(*)(float, float, bool)>(pvr, "CheekyFakePVR_SetGaze")(0, 0, false);
+    frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "PVR samples without a timestamp are invalid");
+    proc<void(*)(float, float, bool)>(pvr, "CheekyFakePVR_SetGaze")(0.2F, -0.1F, true);
+    const auto set_clock = proc<void(*)(unsigned)>(pvr, "CheekyFakePVR_SetClockMode");
+    set_clock(2); frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "Non-finite PVR timestamps must not supply gaze");
+    set_clock(0); frames(5);
+    require(contains(state(), "\"gaze_valid\":true"), "Valid PVR timestamps recover gaze");
+    set_clock(1); Sleep(220); frames(5);
+    require(contains(state(), "\"gaze_valid\":false"), "Frozen PVR timestamps expire");
+    set_clock(0); frames(5);
+    require(contains(state(), "\"gaze_valid\":true"), "Advancing PVR timestamps recover after a stall");
+    if (mode == 1) {
+        using namespace cheeky::foveated_dlss;
+        const auto ngx = GetModuleHandleW(L"nvngx_dlss.dll");
+        using CreateFeature = NgxResult(*)(ID3D11DeviceContext*, unsigned, NgxParameters*, NgxHandle**);
+        using Evaluate = NgxResult(*)(ID3D11DeviceContext*, const NgxHandle*, const NgxParameters*, NgxProgressCallback);
+        const auto create_feature = proc<CreateFeature>(ngx, "NVSDK_NGX_D3D11_CreateFeature");
+        const auto evaluate = proc<Evaluate>(ngx, "NVSDK_NGX_D3D11_EvaluateFeature");
+        const auto get_index = proc<int(*)(void*, void*, int*)>(libovr, "ovr_GetTextureSwapChainCurrentIndex");
+        const auto get_buffer = proc<int(*)(void*, void*, int, IID, void**)>(libovr, "ovr_GetTextureSwapChainBufferDX");
+        ComPtr<ID3D11DeviceContext> context; device->GetImmediateContext(&context);
+        MockNgxParameters parameters;
+        parameters.Set("Width", 512U); parameters.Set("Height", 512U);
+        parameters.Set("OutWidth", 512U); parameters.Set("OutHeight", 512U);
+        parameters.Set("DLSS.Feature.Create.Flags", 2U); parameters.Set("PerfQualityValue", 2U);
+        ComPtr<ID3D11Texture2D> source;
+        const D3D11_TEXTURE2D_DESC desc{512,512,1,1,DXGI_FORMAT_R8G8B8A8_UNORM,{1,0},D3D11_USAGE_DEFAULT,0,0,0};
+        require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &source)), "AER source image");
+        for (const auto* name : {"Color", "Depth", "MotionVectors"})
+            parameters.Set(name, static_cast<ID3D11Resource*>(source.Get()));
+        std::array<NgxHandle*,2> handles{};
+        for (auto& handle : handles)
+            require(ngx_succeeded(create_feature(context.Get(), 1, &parameters, &handle)), "Create AER eye feature through hooks");
+        require(command(attachment, "1\n100\nset\nEnabled=false\nNrEnabled=false\nPeripheralDlaa=false\nEyeCalibrationMethod=3\nEyeCalibrationContinuous=false"), "Configure AER full search");
+        const std::vector<unsigned> background(512 * 512, 0xff404040);
+        unsigned frame_number{};
+        const auto render_commit = [&](unsigned eye, bool fail = false, bool commit_now = true) {
+            int index{};
+            require(get_index(session, chains[eye], &index) == 0, "Get rotating AER image index");
+            ComPtr<ID3D11Texture2D> image;
+            require(get_buffer(session, chains[eye], index, __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void**>(image.GetAddressOf())) == 0, "Get AER image");
+            context->UpdateSubresource(image.Get(), 0, nullptr, background.data(), 512 * 4, 0);
+            parameters.Set("Output", static_cast<ID3D11Resource*>(image.Get()));
+            require(ngx_succeeded(evaluate(context.Get(), handles[eye], &parameters, nullptr)), "Stamp AER eye through NGX hooks");
+            if (!commit_now) return;
+            if (fail) proc<void(*)()>(libovr, "CheekyFakeLibOVR_FailNextCommit")();
+            require((commit(session, chains[eye]) == 0) != fail, "Forward commit success or failure");
+        };
+        const auto submit = [&](bool fail = false) {
+            if (fail) proc<void(*)()>(libovr, "CheekyFakeLibOVR_FailNextFrame")();
+            require((end_frame(session, frame_number++, nullptr, layers, 1) == 0) != fail, "Forward frame success or failure");
+            context->Flush(); Sleep(3);
+        };
+        const auto mapped = [&] { return contains(snapshot(get), "\"crop_mapping_active\":true"); };
+        const auto stereo_frame = [&] {
+            // Ordinary stereo renders both source eyes before releasing images.
+            render_commit(0, false, false); render_commit(1, false, false);
+            for (auto* chain : chains) require(commit(session, chain) == 0, "Commit complete stereo pair");
+            submit();
+        };
+        const auto acquire = [&](bool alternating) {
+            const auto deadline = GetTickCount64() + 10000;
+            do {
+                if (alternating) { render_commit(frame_number & 1U); submit(); }
+                else stereo_frame();
+            } while (!mapped() && GetTickCount64() < deadline);
+            if (!mapped()) puts(snapshot(get).c_str());
+            require(mapped(), "Actual LibOVR hooks acquire calibration with rotating images");
+        };
+        acquire(true);
+        require(field(state(), "calibration_pair_deferrals") > 0, "Actual AER path pairs commits");
+        const auto recalibrate = [&] {
+            require(command(attachment, "1\n101\ncalibration_recalibrate"), "Recalibrate after AER transition");
+        };
+        recalibrate();
+        acquire(false);
+        const auto paired = field(state(), "calibration_pair_deferrals");
+        for (unsigned i = 0; i < 8; ++i) stereo_frame();
+        require(field(state(), "calibration_pair_deferrals") == paired, "Ordinary stereo never defers a complete pair");
+        recalibrate();
+        // Force an open pair, then lose the second commit and frame.
+        auto before = field(state(), "calibration_pair_deferrals");
+        for (unsigned i = 0; i < 300 && field(state(), "calibration_pair_deferrals") == before; ++i) {
+            render_commit(frame_number & 1U); submit();
+        }
+        require(field(state(), "calibration_pair_deferrals") > before, "Open pair before failed commit");
+        render_commit(frame_number & 1U, true); submit(true);
+        require(!mapped(), "Failed submission cannot publish an incomplete pair");
+        acquire(true);
+        recalibrate();
+        before = field(state(), "calibration_pair_deferrals");
+        for (unsigned i = 0; i < 300 && field(state(), "calibration_pair_deferrals") == before; ++i) {
+            render_commit(frame_number & 1U); submit();
+        }
+        require(field(state(), "calibration_pair_deferrals") > before, "Open pair before swap-chain recreation");
+        parameters.values.erase("Output");
+        for (auto& chain : chains) {
+            proc<DestroyChain>(libovr, "ovr_DestroyTextureSwapChain")(session, chain);
+            require(proc<CreateChain>(libovr, "ovr_CreateTextureSwapChainDX")(session, device.Get(), size, &chain) == 0,
+                "Recreate AER swap chain while a pair is open");
+        }
+        std::memcpy(layer.data() + header, chains.data(), sizeof(void*) * 2);
+        acquire(true);
+        parameters.values.erase("Output");
+        for (auto* handle : handles)
+            require(ngx_succeeded(proc<NgxResult(*)(NgxHandle*)>(ngx, "NVSDK_NGX_D3D11_ReleaseFeature")(handle)), "Release AER feature");
+        puts("PASS: LibOVR hook AER pairing, rotating images, mode switches, failures and swap-chain recreation");
+    }
+    const auto references = proc<References>(libovr, "CheekyFakeLibOVR_References");
+    for (auto* chain : chains)
+        for (int index = 0; index < 3; ++index)
+            require(references(chain, index) <= 4, "Swap-chain image references stay bounded");
+    proc<Destroy>(libovr, "ovr_Destroy")(session);
+    for (auto* chain : chains)
+        for (int index = 0; index < 3; ++index)
+            require(references(chain, index) == 1, "Ending the session returns every swap-chain image reference");
+    text = state();
+    require(contains(text, "\"session\":false") && contains(text, "\"session_captured\":false") &&
+        proc<unsigned(*)()>(pvr, "CheekyFakePVR_Destroyed")() == 1, "Session end forgets the game's PVR session");
+    for (auto* chain : chains) proc<DestroyChain>(libovr, "ovr_DestroyTextureSwapChain")(session, chain);
+    proc<void(*)()>(libovr, "ovr_Shutdown")();
+}
+
 void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn get,
     std::uint64_t attachment, ID3D11Device* device, ID3D11DeviceContext* context, HMODULE ngx,
     const std::filesystem::path& log_path,bool depth24=false,bool backpressure=false,bool init_failure=false, const std::filesystem::path& game_feature_directory={}) {
@@ -135,6 +358,33 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
     }
     if (!active) puts(snapshot(get).c_str());
     require(active, "Actual private DX12 transport executes from generic DX11 host");
+    const auto verify_extent = [&] {
+        ComPtr<ID3D11UnorderedAccessView> view;
+        require(SUCCEEDED(device->CreateUnorderedAccessView(textures[3].Get(), nullptr, &view)), "Extent sentinel view");
+        const float sentinel[]{.25F,.25F,.25F,.25F};
+        context->ClearUnorderedAccessViewFloat(view.Get(), sentinel);
+        parameters.Set("OutWidth", 96U); parameters.Set("OutHeight", 96U);
+        require(ngx_succeeded(evaluate(context, handle, &parameters, nullptr)), "Transport with reused query extent");
+        require(contains(snapshot(get), "\"execution_path\":\"DX12 Transport\""), "Extent regression actually uses transport");
+        require(get_ui(&parameters, "OutWidth") == 96 && get_ui(&parameters, "OutHeight") == 96,
+            "Transport restores reused query dimensions");
+        D3D11_TEXTURE2D_DESC desc{}; textures[3]->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
+        ComPtr<ID3D11Texture2D> staging;
+        require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &staging)), "Transport extent staging");
+        context->CopyResource(staging.Get(), textures[3].Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        require(SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped)), "Read transport extent output");
+        unsigned stale{};
+        for (unsigned y = 0; y < desc.Height; ++y) for (unsigned x = 0; x < desc.Width; ++x) {
+            const auto* rgba = reinterpret_cast<const unsigned short*>(static_cast<const unsigned char*>(mapped.pData) + y * mapped.RowPitch + x * 8);
+            stale += rgba[0] == 0x3400 && rgba[1] == 0x3400 && rgba[2] == 0x3400 && rgba[3] == 0x3400;
+        }
+        context->Unmap(staging.Get(), 0);
+        parameters.values = original_parameters;
+        require(stale == 0, "Transport composite covers created output after reused query");
+    };
+    verify_extent();
     require(proc<unsigned(*)()>(core_runtime, "CheekyFakeInitializations")() == (init_failure ? 2U : 1U) &&
         proc<unsigned(*)()>(ngx, "CheekyFakeInitializations")() == 0,
         "Transport initializes through core and recovers after a deferred retry");
@@ -268,6 +518,7 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
         "Enable peripheral DLAA without NR");
     const auto sr_evaluations = proc<unsigned(*)()>(ngx, "CheekyFakeEvaluates")();
     frames(false);
+    verify_extent();
     require(contains(snapshot(get), "\"execution_path\":\"DX12 Transport\"") &&
         proc<unsigned(*)()>(ngx, "CheekyFakeEvaluates")() >= sr_evaluations + 12,
         "Center SR and peripheral DLAA both evaluate through the snippet without NR");
@@ -312,12 +563,18 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
 int main(int argc, char** argv) {
     try {
         bool ota_transport{}, ota_only{};
-        bool dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
-        unsigned openvr_version{};
+        bool uevr{}, dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
+        unsigned openvr_version{}, libovr_mode{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--dx11") dx11 = true;
+            else if (arg == "--libovr") libovr_mode = 1;
+            else if (arg == "--libovr-legacy") libovr_mode = 2;
+            else if (arg == "--libovr-borrowed") libovr_mode = 3;
+            else if (arg == "--libovr-copied-table") libovr_mode = 4;
+            else if (arg == "--libovr-late") libovr_mode = 5;
             else if (arg == "--conflict") conflict = true;
+            else if (arg == "--uevr") uevr = true;
             else if (arg == "--optiscaler") optiscaler = true;
             else if (arg == "--transport-ota-only") { ota_only = ota_transport = transport = dx11 = true; }
             else if (arg == "--transport-ota") { ota_transport = transport = dx11 = true; }
@@ -362,6 +619,14 @@ int main(int argc, char** argv) {
             original_wait = (*static_cast<void***>(cached_compositor))[2];
             set_openvr_initialized(false);
         }
+        HMODULE fake_pvr{}, fake_libovr{};
+        if (libovr_mode) {
+            // The game's runtime loaded both before Cheeky; Cheeky loads neither.
+            fake_pvr = LoadLibraryW((bin / "test-fixtures" / "LibPVRClient64.dll").c_str());
+            fake_libovr = LoadLibraryW((bin / "test-fixtures" / "LibOVRRT64_1.dll").c_str());
+            require(fake_pvr && fake_libovr, "Load LibOVR runtime and PVR client fixtures");
+            if (libovr_mode == 4) proc<void(*)()>(fake_libovr, "CheekyFakeLibOVR_CopyPvrTable")();
+        }
         HANDLE other_owner{};
         if (conflict) {
             other_owner = cheeky::foveated_dlss::claim_processing_owner();
@@ -369,6 +634,10 @@ int main(int argc, char** argv) {
         }
         auto runtime_path = bin / "CheekyFoveatedDLSS" / "CheekyFoveatedDLSSRuntime.dll";
         HMODULE fake_ngx{};
+        if (libovr_mode == 1) {
+            fake_ngx = LoadLibraryW((bin / "test-fixtures/nvngx_dlss.dll").c_str());
+            require(fake_ngx != nullptr, "Load NGX fixture for actual LibOVR calibration hooks");
+        }
         if (transport) {
             // Keep every fake vendor module private to this test process.
             const auto fixture = bin / "test-fixtures" / "nvngx_dlss.dll";
@@ -413,7 +682,7 @@ int main(int argc, char** argv) {
         CheekyRuntimeStart input;
         input.config_directory = directory_text.c_str(); input.attachment = &attachment;
         input.renderer = dx11 ? 0U : 1U;
-        input.host = optiscaler ? CheekyRuntimeHost::optiscaler : CheekyRuntimeHost::standalone;
+        input.host = uevr ? CheekyRuntimeHost::uevr : optiscaler ? CheekyRuntimeHost::optiscaler : CheekyRuntimeHost::standalone;
         auto bad = input; ++bad.abi; require(!start(&bad), "Reject unknown ABI");
         bad = input; --bad.size; require(!start(&bad), "Reject invalid Start size");
         bad = input; bad.renderer = UINT32_MAX; require(!start(&bad), "Reject unsupported renderer");
@@ -426,7 +695,22 @@ int main(int argc, char** argv) {
             puts("PASS: generic runtime ownership conflict");
             return 0;
         }
+        if (uevr) {
+            std::ofstream saved(directory / "CheekyFoveatedDLSS.ini");
+            saved << "[CheekyFoveatedDLSS]\nSchemaVersion=1\nD3D11D3D12Transport=true\n";
+        }
         require(start(&input) && attachment != 0, "Start before graphics discovery");
+        if (uevr) require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR loads saved transport preference");
+        if (libovr_mode) {
+            verify_libovr(libovr_mode, fake_libovr, fake_pvr, get, command, attachment);
+            detach(attachment);
+            puts(libovr_mode == 1 ? "PASS: LibOVR frames and Pimax PVR gaze observed without OpenXR" :
+                libovr_mode == 2 ? "PASS: LibOVR legacy layer header detected after a missed ovr_Initialize" :
+                libovr_mode == 3 ? "PASS: LibOVR borrowed swap-chain references are never released" :
+                libovr_mode == 4 ? "PASS: PVR session found through implementations when the table is copied" :
+                "PASS: LibOVR current layer header detected after a missed ovr_Initialize");
+            return 0;
+        }
         if (openvr_version) {
             const auto queries_before = openvr_queries();
             // A nonzero generation token persists after shutdown. It must not
@@ -451,8 +735,8 @@ int main(int argc, char** argv) {
         auto text = snapshot(get);
         require(contains(text, "\"attached\":true") && contains(text, "\"ready\":false") &&
             contains(text, "\"processing\":false"), "Pending graphics keeps processing paused");
-        require(contains(text, optiscaler ? "\"host\":\"optiscaler\"" : "\"host\":\"standalone\""), "Snapshot identifies the actual host");
-        require(contains(text, "\"host_supports_afw_projection\":false"), "Generic host does not claim UEVR projection data");
+        require(contains(text, uevr ? "\"host\":\"uevr\"" : optiscaler ? "\"host\":\"optiscaler\"" : "\"host\":\"standalone\""), "Snapshot identifies the actual host");
+        require(contains(text, uevr ? "\"host_supports_afw_projection\":true" : "\"host_supports_afw_projection\":false"), "Projection capability matches host");
         require(command(attachment, "1\n1\nset\nEnabled=true\nWidth=0.63"), "Settings available before graphics");
         require(contains(snapshot(get), "\"processing\":false"), "Settings cannot bypass graphics readiness");
 
@@ -503,11 +787,24 @@ int main(int argc, char** argv) {
             require(contains(snapshot(get), "Cached runtime loaded; use not observed"), "Loading alone does not claim override active");
         }
         if (transport) verify_transport(command, get, attachment, device11.Get(), context11.Get(), fake_ngx,
-            directory / (optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{});
+            directory / (uevr ? "CheekyFoveatedDLSS-UEVR.log" : optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{});
         if (ota_transport) {
             require(contains(snapshot(get), "Active (NVIDIA cached runtime)"), "Override status follows actual OTA evaluations");
             detach(attachment);
             puts("PASS: late NVIDIA OTA transport selects matching DX12 callbacks and executes SR/NR");
+            return 0;
+        }
+        if (uevr) {
+            require(transport, "UEVR runtime fixture exercises transport");
+            tick(attachment, input.renderer, nullptr, nullptr);
+            tick(attachment, input.renderer, device, nullptr);
+            require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR reset preserves transport");
+            detach(attachment);
+            require(start(&input), "Reconnect UEVR host");
+            tick(attachment, input.renderer, device, nullptr);
+            require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR reconnect preserves transport");
+            detach(attachment);
+            puts("PASS: UEVR DX11 transport and NR, device reset and reconnect");
             return 0;
         }
         if(depth24 || backpressure){detach(attachment);return 0;}

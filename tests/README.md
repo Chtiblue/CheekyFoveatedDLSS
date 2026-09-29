@@ -1,13 +1,47 @@
+# OpenXR extension discovery
+
+`CheekyTests.exe --openxr-input` loads the production layer DLL against a mock
+downstream layer/runtime. Extension discovery covers unavailable function lookup,
+failed count/list enumeration, confirmed presence/absence, successful gaze after
+an unanswered probe, and bounded retries when speculative extensions are rejected. It also
+checks application extension preservation, error propagation, system support,
+and every combination of gaze/cylinder support. When both probes are unanswered,
+attempts request both, gaze only, cylinder only, then neither, stopping at the
+first success or any error other than `XR_ERROR_EXTENSION_NOT_PRESENT`.
+Application-requested and confirmed extensions are retained on every attempt.
+Unsupported cylinders retain the existing quad menu fallback. These fixtures
+do not replace an OFXR/headset retest.
+Startup history is persisted in `%TEMP%/CheekyOpenXR-<pid>-<process-start>.log`
+and collected as `CheekyOpenXR-startup.log` in support ZIPs. It includes probe
+stages/results, application-requested extensions, retries and final enabled
+states, including failed instance creation. Tests verify the file and its
+inclusion in UEVR, standalone and OptiScaler bundles. ReShade collects the same
+file. Logging is best effort if the temporary directory cannot be written.
+
 # Cropped stereo calibration
+
+`CheekyTests.exe --libovr-aer-calibration` reproduces legacy AER's single-eye
+commits and verifies acquisition across two frames. It also checks that a pair
+can defer only once and that failed, complete, or destroyed frames do not defer.
+The default suite runs it; CTest registers `CheekyLibOVRAERCalibration`.
+`CheekyRuntimeHostTests --libovr`, with and without `--optiscaler`, exercises the
+actual NGX/LibOVR hooks, rotating image indices, stereo/AER switching, failed
+commits and submissions, and swap-chain recreation while a pair is open.
 
 `CheekyTests.exe --retained-calibration` tests the optional change-only policy
 with actual WARP rendering on DX11/OpenVR, DX11/OpenXR, DX12/OpenVR, DX12/OpenXR,
-and DX12-to-DX11/OpenXR. It reads source pixels to verify all markers stop after
+DX12-to-DX11/OpenXR, DX11/LibOVR, and DX12-to-DX11/LibOVR. It reads source pixels to verify all markers stop after
 acquisition, waits beyond the crop timeout, and checks manual reacquisition,
 same-view eye swaps, source dimensions, submission bounds, recreated/new views,
 session changes, diagnostic resets, and resuming continuous validation.
 Native DX12 manual reacquisition switches to alternating source-eye renders while
 submitting both eyes each interval, covering recalibration after AFW starts.
+
+`CheekyTests.exe --calibration-search` checks refined grid locator scale against
+the complete white/black rings. It reproduces a partial-code fit that falsely
+resembled a vertical reflection, accepts real reflected grids, and rejects
+conflicting authentic source identities or orientations. It runs in the build
+script, the standard suite, and CTest as `CheekyCalibrationSearch`.
 
 `CheekyTests.exe --crop-calibration` exercises the production DX11, DX12 and
 DX12-to-DX11 stamp/read paths on WARP. `--crop-calibration-dx12` isolates the

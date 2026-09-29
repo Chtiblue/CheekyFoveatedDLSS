@@ -72,6 +72,12 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
+& $testExecutable --calibration-search
+if ($LASTEXITCODE -ne 0) { throw "Calibration locator scale and ambiguity regressions failed." }
+& $testExecutable --libovr-policy
+if ($LASTEXITCODE -ne 0) { throw "LibOVR source arbitration and calibration ownership tests failed." }
+& $testExecutable --libovr-transfer
+if ($LASTEXITCODE -ne 0) { throw "LibOVR D3D11/D3D12 source transfer tests failed." }
 & $testExecutable --calibration-incomplete
 if ($LASTEXITCODE -ne 0) { throw "Incomplete corner calibration escalation test failed." }
 & $testExecutable --rr-contract
@@ -110,7 +116,7 @@ foreach ($mode in @("native", "native-c", "streamline", "missing-lower", "public
 }
 
 $runtimeHostTest = Join-Path $projectRoot "bin\$Configuration\CheekyRuntimeHostTests.exe"
-foreach ($arguments in @(@(), @('--dx11'), @('--optiscaler'), @('--optiscaler','--dx11'), @('--conflict'), @('--transport'), @('--transport-init-failure'), @('--optiscaler','--transport'), @('--transport-forwarded'), @('--optiscaler','--transport-forwarded'))) {
+foreach ($arguments in @(@(), @('--dx11'), @('--optiscaler'), @('--optiscaler','--dx11'), @('--conflict'), @('--transport'), @('--uevr','--transport'), @('--transport-init-failure'), @('--optiscaler','--transport'), @('--transport-forwarded'), @('--optiscaler','--transport-forwarded'))) {
     & $runtimeHostTest @arguments
     if ($LASTEXITCODE -ne 0) { throw "Generic runtime tests failed: $arguments" }
 }
@@ -120,6 +126,12 @@ foreach ($mode in @('native','native-c','streamline','missing-lower','public-fir
     if ($LASTEXITCODE -ne 0) { throw "R.E.A.L. VR runtime routing failed: $mode" }
     & $standaloneHostTest "realvr-$mode" standalone
     if ($LASTEXITCODE -ne 0) { throw "R.E.A.L. VR standalone routing failed: $mode" }
+}
+foreach ($mode in @('libovr','libovr-legacy','libovr-late','libovr-borrowed','libovr-copied-table')) {
+    & $runtimeHostTest "--$mode"
+    if ($LASTEXITCODE -ne 0) { throw "Standalone LibOVR/Pimax PVR gaze failed: $mode" }
+    & $runtimeHostTest --optiscaler "--$mode"
+    if ($LASTEXITCODE -ne 0) { throw "OptiScaler LibOVR/Pimax PVR gaze failed: $mode" }
 }
 foreach ($abi in @('022','027','028','029')) {
     & $runtimeHostTest "--openvr-late-$abi"

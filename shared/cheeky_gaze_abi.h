@@ -8,6 +8,8 @@
 
 #define CHEEKY_GAZE_STATUS_SIMULATED (1U << 9U)
 #define CHEEKY_GAZE_STATUS_OPENVR (1U << 10U)
+// In-process LibOVR adapter (Oculus PC SDK runtimes, including Pimax's).
+#define CHEEKY_GAZE_STATUS_LIBOVR (1U << 11U)
 
 #define CHEEKY_GAZE_STATUS_LAYER_ACTIVE (1U << 0U)
 #define CHEEKY_GAZE_STATUS_EXTENSION_ENABLED (1U << 1U)

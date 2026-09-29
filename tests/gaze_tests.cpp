@@ -19,6 +19,10 @@
 #include "streamline_create_extent.hpp"
 #include "openvr_gaze.hpp"
 #include "openvr_gaze_math.hpp"
+#include "libovr_gaze.hpp"
+#include "libovr_gaze_math.hpp"
+#include "native_gaze_selection.hpp"
+#include "eye_calibration.hpp"
 #include "openvr_menu.hpp"
 #include "graphics_observer.hpp"
 #include "ngx_evaluation_extent.hpp"
@@ -49,6 +53,12 @@ const CheekyGazeSnapshotV1* test_openvr_snapshot{};
 bool read_openvr_gaze(const Settings&, IUnknown*, CheekyGazeSnapshotV1& output, std::uint64_t) noexcept {
     if (!test_openvr_snapshot) return false;
     output=*test_openvr_snapshot;
+    return true;
+}
+const CheekyGazeSnapshotV1* test_libovr_snapshot{};
+bool read_libovr_gaze(const Settings&, IUnknown*, CheekyGazeSnapshotV1& output, std::uint64_t) noexcept {
+    if (!test_libovr_snapshot) return false;
+    output=*test_libovr_snapshot;
     return true;
 }
 
@@ -1732,6 +1742,254 @@ void test_openvr_geometry() {
     expect_near(u,(1.F+std::tan(0.2F))*0.5F,0.0001F,"inverse eye rotation projects head forward");
 }
 
+void test_libovr_geometry() {
+    using namespace cheeky::foveated_dlss;
+    int chain_a{}, chain_b{}, unknown{};
+    const auto known = [&](libovr::SwapChain chain) { return chain == &chain_a || chain == &chain_b; };
+    // Each layout in its own zeroed buffer, large enough for the other reading.
+    alignas(8) unsigned char current_storage[sizeof(libovr::LayerEyeFov) * 2]{};
+    alignas(8) unsigned char legacy_storage[sizeof(libovr::LayerEyeFov) * 2]{};
+    libovr::LayerEyeFov current{};
+    current.header.Type = libovr::layer_eye_fov;
+    current.ColorTexture[0] = &chain_a; current.ColorTexture[1] = &chain_b;
+    current.Viewport[0] = {0, 0, 1600, 1400}; current.Viewport[1] = {0, 0, 1600, 1400};
+    current.Fov[0] = {1.2F, 1.1F, 1.3F, 0.9F}; current.Fov[1] = {1.2F, 1.1F, 0.9F, 1.3F};
+    std::memcpy(current_storage, &current, sizeof(current));
+    libovr::LegacyLayerEyeFov legacy{};
+    legacy.header.Type = libovr::layer_eye_fov_depth;
+    legacy.ColorTexture[0] = &chain_a;
+    legacy.Viewport[0] = {0, 0, 1600, 1400}; legacy.Viewport[1] = {1600, 0, 1600, 1400};
+    legacy.Fov[0] = legacy.Fov[1] = {1.F, 1.F, 1.F, 1.F};
+    std::memcpy(legacy_storage, &legacy, sizeof(legacy));
+    const void* current_list[]{nullptr, current_storage};
+    const void* legacy_list[]{legacy_storage};
+    auto p = parse_libovr_projection(current_list, 2, LibOVRLayout::current, known);
+    expect(p.valid && p.chains[0] == &chain_a && p.chains[1] == &chain_b && p.candidates == 1,
+        "SDK 1.25+ EyeFov layer is parsed after its reserved header bytes");
+    expect_near(p.fovs[1].LeftTan, 0.9F, 0.0001F, "per-eye submitted FOV is kept");
+    expect(!parse_libovr_projection(current_list, 2, LibOVRLayout::legacy, known).valid,
+        "current layer read with the legacy header finds no observed swap chain");
+    p = parse_libovr_projection(legacy_list, 1, LibOVRLayout::legacy, known);
+    expect(p.valid && p.chains[0] == &chain_a && p.chains[1] == &chain_a && p.viewports[1].x == 1600,
+        "legacy EyeFovDepth with one texture shares it between packed eye viewports");
+    expect(!parse_libovr_projection(legacy_list, 1, LibOVRLayout::current, known).valid,
+        "legacy layer read with the current header is rejected");
+    current.ColorTexture[1] = &unknown;
+    std::memcpy(current_storage, &current, sizeof(current));
+    expect(!parse_libovr_projection(current_list, 2, LibOVRLayout::current, known).valid,
+        "unobserved swap chains are never accepted");
+    current.ColorTexture[1] = &chain_b;
+    current.header.Flags = libovr::layer_flag_texture_origin_at_bottom_left;
+    std::memcpy(current_storage, &current, sizeof(current));
+    expect(!parse_libovr_projection(current_list, 2, LibOVRLayout::current, known).valid,
+        "bottom-left texture origin is rejected");
+    const auto raw = libovr_raw_projection({1.F, 1.F, 1.F, 1.F});
+    float identity[3][4]{};
+    eye_rotation_matrix({0, 0, 0, 1}, identity);
+    pvr::EyeTrackingInfo info{};
+    float ray[3]{};
+    expect(!pvr_combined_gaze_ray(info, ray), "PVR sample time zero means no valid gaze");
+    for (const double time : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        info.TimeInSeconds = time;
+        expect(!pvr_combined_gaze_ray(info, ray), "invalid PVR timestamps cannot bypass stall detection");
+    }
+    info.TimeInSeconds = 1;
+    info.GazeTan[0].x = 20; info.GazeTan[1].x = -20;
+    expect(!pvr_combined_gaze_ray(info, ray), "invalid eyes cannot cancel into a valid averaged gaze");
+    info.TimeInSeconds = 12.5;
+    info.GazeTan[0] = {0.1F, 0.2F}; info.GazeTan[1] = {0.3F, 0.2F};
+    float u{}, v{};
+    expect(pvr_combined_gaze_ray(info, ray) && openvr_project_direction(identity, raw.left, raw.right, raw.top,
+        raw.bottom, ray, u, v), "combined PVR gaze projects through the submitted LibOVR FOV");
+    expect_near(u, 0.6F, 0.0001F, "PVR positive x tangent looks right");
+    expect_near(v, 0.4F, 0.0001F, "PVR positive y tangent looks up");
+    info.GazeTan[0].y = info.GazeTan[1].y = -0.2F;
+    expect(pvr_combined_gaze_ray(info, ray) && openvr_project_direction(identity, raw.left, raw.right, raw.top,
+        raw.bottom, ray, u, v), "downward PVR gaze projects");
+    expect_near(v, 0.6F, 0.0001F, "PVR negative y tangent looks down");
+    info.GazeTan[1].x = NAN;
+    expect(!pvr_combined_gaze_ray(info, ray), "nonfinite PVR gaze is invalid");
+    float canted[3][4]{};
+    eye_rotation_matrix({0, std::sin(0.1F), 0, std::cos(0.1F)}, canted);
+    const float forward[3]{0, 0, -1};
+    expect(openvr_project_direction(canted, raw.left, raw.right, raw.top, raw.bottom, forward, u, v),
+        "eye rotation projects head forward");
+    expect_near(u, (1.F + std::tan(0.2F)) * 0.5F, 0.0001F, "eye rotation uses the OpenVR eye-to-head convention");
+    // Submitted render poses: symmetric cant about a turned head. Only the
+    // eyes' rotation relative to their shared forward may move the center.
+    const auto yaw = [](float angle) { return libovr::Quatf{0, std::sin(angle * .5F), 0, std::cos(angle * .5F)}; };
+    const auto compose = [](libovr::Quatf a, libovr::Quatf b) {
+        return libovr::Quatf{a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+    };
+    const libovr::Quatf pitch{std::sin(0.3F), 0, 0, std::cos(0.3F)};
+    const auto head = compose(yaw(0.7F), pitch);
+    std::array<libovr::Posef, 2> poses{};
+    poses[0].Orientation = compose(head, yaw(0.1F));
+    poses[1].Orientation = compose(head, yaw(-0.1F));
+    float rotations[2][3][4]{};
+    expect(libovr_eye_rotations(poses, rotations), "canted submitted eye poses resolve");
+    expect(openvr_project_direction(rotations[0], raw.left, raw.right, raw.top, raw.bottom, forward, u, v),
+        "left eye projects head forward");
+    expect_near(u, (1.F + std::tan(0.1F)) * 0.5F, 0.0001F, "left cant relative to the shared forward");
+    expect_near(v, 0.5F, 0.0001F, "head pitch does not move alignment");
+    expect(openvr_project_direction(rotations[1], raw.left, raw.right, raw.top, raw.bottom, forward, u, v),
+        "right eye projects head forward");
+    expect_near(u, (1.F - std::tan(0.1F)) * 0.5F, 0.0001F, "right cant relative to the shared forward");
+    poses[1].Orientation = poses[0].Orientation;
+    expect(libovr_eye_rotations(poses, rotations) &&
+        openvr_project_direction(rotations[1], raw.left, raw.right, raw.top, raw.bottom, forward, u, v),
+        "parallel submitted eye poses resolve");
+    expect_near(u, 0.5F, 0.0001F, "parallel projection has no eye rotation");
+    expect(!libovr_eye_rotations({}, rotations), "missing render poses fall back to identity");
+    expect(openvr_project_direction(rotations[0], raw.left, raw.right, raw.top, raw.bottom, forward, u, v) &&
+        std::abs(u - 0.5F) < 0.0001F, "fallback rotation is identity");
+}
+
+// LibOVR snapshots use the session-generation calibration route (unlike
+// OpenVR's session 0) and report their own alignment source.
+void test_libovr_coordinator() {
+    using namespace cheeky::foveated_dlss;
+    reset_gaze_foveation();
+    register_stereo_view(1911); register_stereo_view(1912);
+    Settings settings{};
+    settings.width = settings.height = 0.4F;
+    settings.center_mode = FoveationCenterMode::openxr_gaze;
+    settings.gaze_smoothing_ms = 0;
+    settings.gaze_quantization_pixels = 1;
+    CheekyGazeSnapshotV1 snapshot{};
+    snapshot.abi_version = CHEEKY_GAZE_ABI_VERSION;
+    snapshot.structure_size = sizeof(snapshot);
+    snapshot.view_count = 2;
+    snapshot.session_generation = 0x4000000000000001ULL;
+    snapshot.swapchain_generation = 1;
+    snapshot.status_flags = CHEEKY_GAZE_STATUS_LAYER_ACTIVE | CHEEKY_GAZE_STATUS_LIBOVR |
+        CHEEKY_GAZE_STATUS_MAPPING_READY | CHEEKY_GAZE_STATUS_SESSION_FOCUSED | CHEEKY_GAZE_STATUS_GAZE_VALID;
+    const std::array<StereoSourceCrop, 2> source_crops{{{0, 0, 1, 1, 2400, 2000, true}, {0, 0, 1, 1, 2400, 2000, true}}};
+    expect(publish_stereo_calibration(1911, 1912, stereo_view_generation(1911), stereo_view_generation(1912),
+        5000, GetTickCount64(), nullptr, snapshot.session_generation, false, false, &source_crops),
+        "LibOVR eye mapping publishes");
+    for (unsigned eye = 0; eye < 2; ++eye) {
+        auto& view = snapshot.views[eye];
+        view.structure_size = sizeof(view);
+        view.view_index = eye;
+        view.flags = CHEEKY_GAZE_VIEW_RESOURCE_VALID | CHEEKY_GAZE_VIEW_FORWARD_VALID | CHEEKY_GAZE_VIEW_FOV_VALID |
+            CHEEKY_GAZE_VIEW_ORIENTATION_VALID;
+        view.image_rect_width = 2400; view.image_rect_height = 2000;
+        view.resource_identity = 300 + eye; view.swapchain_identity = 400 + eye;
+        view.forward_u = eye ? 0.46F : 0.54F; view.forward_v = 0.5F;
+        view.center_u = eye ? 0.35F : 0.65F; view.center_v = 0.6F;
+    }
+    test_libovr_snapshot = &snapshot;
+    FoveationCenter centers[2];
+    const auto step = [&] {
+        LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+        snapshot.publication_qpc = static_cast<std::uint64_t>(now.QuadPart);
+        ++snapshot.predicted_display_time;
+        for (unsigned eye = 0; eye < 2; ++eye) {
+            bool reset{};
+            expect(calculate_coordinated_center(settings, 1911 + eye, nullptr, 1200, 1000, 2400, 2000,
+                0, 0, centers[eye], reset), "LibOVR placement resolves from the runtime adapter");
+        }
+    };
+    step(); step(); step();
+    expect(gaze_diagnostics().using_gaze, "LibOVR gaze drives foveation");
+    for (unsigned eye = 0; eye < 2; ++eye)
+        expect_near(centers[eye].u, snapshot.views[eye].center_u, 0.002F, "LibOVR gaze follows the mapped eye");
+    settings.center_mode = FoveationCenterMode::fixed;
+    settings.auto_stereo_alignment = true;
+    step();
+    expect(gaze_diagnostics().alignment_source == 4U, "LibOVR forward alignment is reported as LibOVR");
+    expect_near(centers[1].u, snapshot.views[1].forward_u, 0.002F, "fixed placement uses LibOVR alignment");
+    // OpenVR calibrations use session 0; they must not map a LibOVR session.
+    clear_stereo_calibration(); reset_gaze_foveation();
+    expect(publish_stereo_calibration(1911, 1912, stereo_view_generation(1911), stereo_view_generation(1912),
+        5000, GetTickCount64(), nullptr, 0, false, false, &source_crops), "OpenVR-style mapping publishes");
+    settings.center_mode = FoveationCenterMode::openxr_gaze;
+    step(); step(); step();
+    expect(!gaze_diagnostics().using_gaze, "a calibration from another backend cannot map LibOVR gaze");
+    auto openvr = snapshot;
+    openvr.status_flags &= ~CHEEKY_GAZE_STATUS_LIBOVR;
+    openvr.status_flags |= CHEEKY_GAZE_STATUS_OPENVR;
+    openvr.session_generation = 0x8000000000000001ULL;
+    test_openvr_snapshot = &openvr;
+    for (unsigned i = 0; i < 6; ++i) {
+        LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+        openvr.publication_qpc = now.QuadPart;
+        ++openvr.predicted_display_time;
+        step(); // LibOVR publishes later, but only OpenVR owns this calibration.
+        expect((gaze_diagnostics().status_flags & CHEEKY_GAZE_STATUS_OPENVR) != 0,
+            "newer unmapped LibOVR must not steal calibrated OpenVR placement");
+    }
+    expect(gaze_diagnostics().using_gaze, "mixed-runtime placement keeps working OpenVR gaze");
+    test_openvr_snapshot = nullptr;
+    test_libovr_snapshot = nullptr;
+    unregister_stereo_view(1911); unregister_stereo_view(1912);
+    clear_stereo_calibration(); reset_gaze_foveation();
+}
+
+void test_native_gaze_selection() {
+    using namespace cheeky::foveated_dlss;
+    CheekyGazeSnapshotV1 sample{};
+    sample.abi_version = CHEEKY_GAZE_ABI_VERSION; sample.structure_size = sizeof(sample);
+    sample.session_generation = 17; sample.publication_qpc = 999; sample.view_count = 2;
+    sample.status_flags = CHEEKY_GAZE_STATUS_LIBOVR | CHEEKY_GAZE_STATUS_SESSION_FOCUSED |
+        CHEEKY_GAZE_STATUS_MAPPING_READY | CHEEKY_GAZE_STATUS_GAZE_VALID;
+    sample.views[0].resource_identity = 99; sample.views[0].flags = CHEEKY_GAZE_VIEW_RESOURCE_VALID;
+    const auto quality = [&](const CheekyGazeSnapshotV1& value, std::uint64_t resource = 99) {
+        return native_gaze_quality(value, resource, {}, 1000, 1000, true);
+    };
+    const auto good = quality(sample);
+    auto other = sample; other.publication_qpc = 1000;
+    expect(quality(other) == good, "publication order cannot alternate equally usable native sources");
+    other.status_flags &= ~CHEEKY_GAZE_STATUS_GAZE_VALID;
+    expect(quality(other) < good, "missing gaze loses to valid gaze with the same mapping");
+    other = sample; other.status_flags &= ~CHEEKY_GAZE_STATUS_MAPPING_READY;
+    expect(quality(other) < good, "unready mapping cannot replace a usable source");
+    other = sample; other.views[0].resource_identity = 100;
+    expect(quality(other) < good, "exact resource evidence wins over an unrelated newer source");
+    other = sample; other.publication_qpc = 949;
+    expect(quality(other) == 0, "stale native publication is unusable");
+    other.publication_qpc = 1001;
+    expect(quality(other) == 0, "future publication is unusable");
+    other = sample; other.status_flags &= ~CHEEKY_GAZE_STATUS_SESSION_FOCUSED;
+    expect(quality(other) == 0, "unfocused runtime loses selection");
+    StereoEyeAssignment assignment{}; assignment.calibrated = true; assignment.calibration_session = 17;
+    expect(native_gaze_quality(sample, 0, assignment, 1000, 1000, true) == good,
+        "calibration can map a transferred image without an exact resource match");
+    assignment.calibration_session = 18;
+    expect(native_gaze_quality(sample, 0, assignment, 1000, 1000, true) < good,
+        "another session's calibration does not improve selection");
+}
+
+void test_libovr_calibration_ownership() {
+    using namespace cheeky::foveated_dlss;
+    for (const auto owner : {EyeCalibrationBackend::openvr, EyeCalibrationBackend::openxr}) {
+        eye_calibration_stop(); eye_calibration_enable(true); eye_calibration_reset_stats();
+        eye_calibration_frame(owner, owner == EyeCalibrationBackend::openvr ? 0 : 101, 11);
+        const auto before = eye_calibration_stats();
+        expect(!eye_calibration_frame(EyeCalibrationBackend::libovr, 202, 11),
+            "LibOVR cannot steal an active existing backend's calibration");
+        eye_calibration_unsupported_submit(EyeCalibrationBackend::libovr, 202);
+        eye_calibration_destroy_session(202);
+        const auto after = eye_calibration_stats();
+        expect(after.backend == owner && after.frames == before.frames && !after.unsupported_submission,
+            "foreign LibOVR frames, unsupported submissions and teardown leave the owner intact");
+    }
+    eye_calibration_destroy_session(101);
+    eye_calibration_frame(EyeCalibrationBackend::libovr, 202, 11);
+    expect(eye_calibration_stats().backend == EyeCalibrationBackend::libovr,
+        "LibOVR can acquire calibration after OpenXR ends");
+    eye_calibration_unsupported_submit(EyeCalibrationBackend::libovr, 203);
+    expect(!eye_calibration_stats().unsupported_submission, "old LibOVR session cannot poison a new session");
+    eye_calibration_unsupported_submit(EyeCalibrationBackend::libovr, 202);
+    expect(eye_calibration_stats().unsupported_submission, "own unsupported submission remains visible");
+    eye_calibration_frame(EyeCalibrationBackend::openvr, 0, 11);
+    expect(eye_calibration_stats().backend == EyeCalibrationBackend::openvr,
+        "existing OpenVR route can preempt LibOVR");
+    eye_calibration_stop(); eye_calibration_reset_stats();
+}
+
 void test_center_supersampling() {
     using namespace cheeky::foveated_dlss;
     const FoveationGeometry crop{100, 50, 501, 301, 1200, 100, 1002, 602};
@@ -2387,6 +2645,14 @@ int run_vulkan_tests(bool real=false, bool integration=false);
 int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
 int main(int argc, char** argv) {
+    extern int run_calibration_search_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--calibration-search") == 0) return run_calibration_search_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--libovr-policy") == 0) {
+        test_libovr_geometry(); test_native_gaze_selection(); test_libovr_coordinator();
+        test_libovr_calibration_ownership();
+        if (!failures) std::cout << "PASS LibOVR gaze selection, validation and calibration ownership\n";
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--openvr-menu-focus") == 0) {
         test_openvr_menu_focus();
         if (!failures) std::cout << "OpenVR menu gaze focus checks passed\n";
@@ -2397,6 +2663,10 @@ int main(int argc, char** argv) {
         return failures ? 1 : 0;
     }
     extern int run_retained_calibration_tests();
+    extern int run_libovr_alternating_calibration_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--libovr-aer-calibration") == 0) return run_libovr_alternating_calibration_tests();
+    extern int run_libovr_transfer_tests();
+    if (argc == 2 && std::strcmp(argv[1], "--libovr-transfer") == 0) return run_libovr_transfer_tests();
     extern int run_calibration_modes_tests(bool incomplete_only = false);
     if (argc == 2 && std::strcmp(argv[1], "--calibration-incomplete") == 0) return run_calibration_modes_tests(true);
     if (argc == 2 && std::strcmp(argv[1], "--calibration-modes") == 0) return run_calibration_modes_tests();
@@ -2458,6 +2728,10 @@ int main(int argc, char** argv) {
     test_packed_alignment_coordinator();
     test_packed_alignment_coordinator(true);
     test_openvr_geometry();
+    test_libovr_geometry();
+    test_libovr_coordinator();
+    test_native_gaze_selection();
+    test_libovr_calibration_ownership();
     test_auto_alignment();
     test_mono_gaze_coordinator();
     test_auto_alignment_history(false);
@@ -2501,6 +2775,7 @@ int main(int argc, char** argv) {
     failures += run_debug_exposure_tests();
     failures += run_eye_calibration_tests();
     failures += run_retained_calibration_tests();
+    failures += run_libovr_alternating_calibration_tests();
     failures += run_crop_calibration12_tests();
     failures += run_stereo_support_tests();
     failures += run_stereo_support12_tests();

@@ -332,6 +332,13 @@ int wmain(int argc, wchar_t** argv) {
         const auto directory = fs::path(path).parent_path() /
             (L"core-discovery-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
         fs::create_directories(directory);
+        // This synthetic core has no lower SR runtime to forward to. Exercise
+        // cached core callbacks with the higher hook explicitly selected.
+        {
+            std::ofstream config(directory / L"CheekyFoveatedDLSS.ini");
+            config << "[CheekyFoveatedDLSS]\nD3D12LowerHook=false\n";
+            require(config.good(), "write core discovery hook configuration");
+        }
         fs::copy_file(argv[reject ? 4 : 3], directory / L"nvngx.dll");
         const auto alias = LoadLibraryW((directory / L"nvngx.dll").c_str());
         require(alias != nullptr, "load nvngx alias fixture");
@@ -347,6 +354,8 @@ int wmain(int argc, wchar_t** argv) {
         input.config_directory = directory_text.c_str(); input.renderer = 1;
         input.host = CheekyRuntimeHost::optiscaler; input.attachment = &attachment;
         require(start(&input), "start runtime for OptiScaler alias discovery");
+        require(snapshot(get).find("\"d3d12_lower_hook_active\":false") != std::string::npos,
+                "core discovery uses the higher D3D12 hook");
         const auto log_contains = [&](const char* part) {
             std::ifstream log(directory / L"CheekyFoveatedDLSS-OptiScaler.log");
             const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
@@ -356,7 +365,7 @@ int wmain(int argc, wchar_t** argv) {
         for (unsigned i = 0; i < 200 && !classified; ++i) {
             if (reject) {
                 classified = log_contains("NGX core alias ignored");
-            } else classified = snapshot(get).find("\"direct_detour\":true") != std::string::npos;
+            } else classified = log_contains("Direct detour installed export=NVSDK_NGX_D3D12_ReleaseFeature");
             if (!classified) Sleep(25);
         }
         require(classified, "core alias classification completed");

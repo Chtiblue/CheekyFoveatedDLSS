@@ -19,6 +19,7 @@
 #include "diagnostics.hpp"
 #include "gaze_foveation.hpp"
 #include "openvr_gaze.hpp"
+#include "libovr_gaze.hpp"
 #include "crop_motion.hpp"
 #include "ngx_abi.hpp"
 #include "ngx_evaluation_extent.hpp"
@@ -57,6 +58,7 @@ void register_d3d11_game_feature(
     std::uint32_t,
     NgxResult (*)(ID3D11DeviceContext*, std::uint32_t, NgxParameters*, NgxHandle**),
     NgxResult (*)(NgxHandle*),
+    NgxOutputExtent output,
     bool preserve_existing = false
 ) noexcept;
 
@@ -4045,6 +4047,7 @@ NgxResult runtime_create_d3d11(const D3D11RuntimeCallbacks& runtime,
     // Do not force output subrects on the game's feature. The foveated DX11
     // path uses a separate private feature whose creation-time output size is
     // the crop size, so the game feature can keep its original contract.
+    const NgxOutputExtent output_extent{get_ui(parameters, "OutWidth"), get_ui(parameters, "OutHeight")};
     const auto result = traced_feature_create(original, context, feature, parameters, handle, 0);
     if (ngx_succeeded(result) && handle != nullptr && *handle != nullptr &&
         feature == 1U) {
@@ -4052,7 +4055,8 @@ NgxResult runtime_create_d3d11(const D3D11RuntimeCallbacks& runtime,
             *handle,
             feature,
             original,
-            runtime.release.load(std::memory_order_acquire)
+            runtime.release.load(std::memory_order_acquire),
+            output_extent
         );
         register_stereo_view(static_cast<DlssViewId>(
             reinterpret_cast<std::uintptr_t>(*handle)
@@ -4071,6 +4075,7 @@ NgxResult hook_core_create_d3d11(
     if (original == nullptr) return 0xBAD00007U;
     diagnostic_note_create(DiagnosticApi::d3d11);
 
+    const NgxOutputExtent output_extent{get_ui(parameters, "OutWidth"), get_ui(parameters, "OutHeight")};
     const auto result = traced_feature_create(original, context, feature, parameters, handle, 1);
     if (ngx_succeeded(result) && handle != nullptr && *handle != nullptr &&
         feature == 1U) {
@@ -4078,7 +4083,8 @@ NgxResult hook_core_create_d3d11(
             *handle,
             feature,
             original,
-            real_core_release_d3d11.load(std::memory_order_acquire), true
+            real_core_release_d3d11.load(std::memory_order_acquire),
+            output_extent, true
         );
     }
     return result;
@@ -4374,6 +4380,28 @@ NgxResult evaluate_with_eye_calibration(ID3D11DeviceContext* context, const NgxH
         bool outer = calibration_evaluation_depth++ == 0;
         ~Depth() { --calibration_evaluation_depth; }
     } depth;
+    // Games can reuse the parameter bag for an optimal-settings query (BG3
+    // leaves its flat-window size in OutWidth). Native DLSS keeps the created
+    // output, so normalize before foveation, transport and marker stamping;
+    // otherwise only a corner of the output is composited. Streamline supplies
+    // its own extents, as in the DX12 path.
+    const bool normalize = depth.outer && !inside_streamline_evaluation && !is_d3d11_private_handle(handle);
+    const auto created_output = normalize ? d3d11_game_output_extent(handle) : NgxOutputExtent{};
+    const auto evaluated_width = get_ui(parameters, "OutWidth");
+    const auto evaluated_height = get_ui(parameters, "OutHeight");
+    // Late-adopted features have no observed creation contract. Preserve both
+    // input and output dimensions until the game recreates the feature.
+    const NgxEvaluationExtentScope extent_scope(
+        created_output.width && created_output.height ? parameters : nullptr, created_output);
+    if (created_output.width && created_output.height && evaluated_width && evaluated_height &&
+        (evaluated_width != created_output.width || evaluated_height != created_output.height)) {
+        static std::atomic<std::uint64_t> normalized{};
+        const auto count = ++normalized;
+        if (count <= 8U || (count & (count - 1U)) == 0U)
+            trace_event("D3D11 evaluation output normalized handle=%p OutWidth=%ux%u created=%ux%u count=%llu",
+                handle, evaluated_width, evaluated_height, created_output.width, created_output.height,
+                static_cast<unsigned long long>(count));
+    }
     if (depth.outer && !is_d3d11_private_handle(handle))
         log_ngx_exposure<ID3D11Resource>(11, handle, parameters);
     const auto result = invoke();
@@ -6568,6 +6596,7 @@ DWORD WINAPI interception_worker(void*) noexcept {
            WaitForSingleObject(event, 250U) == WAIT_TIMEOUT) {
         drain_hook_debug_loader_events();
         poll_openvr_hooks();
+        poll_libovr_hooks();
         if (worker_tick < 20U) trace_event("HOOKDBG worker tick=%u begin tid=%lu", worker_tick, static_cast<unsigned long>(GetCurrentThreadId()));
         if (streamline_loaded()) {
             if (!streamline_inline_mode.load(std::memory_order_acquire) &&
@@ -6787,6 +6816,7 @@ void stop_interception() noexcept {
     }
     if (event != nullptr) CloseHandle(event);
     stop_openvr_hooks();
+    stop_libovr_hooks();
     restore_streamline_options();
     if (streamline_hook_lock_ready.load(std::memory_order_acquire)) {
         uninstall_streamline_inline_hooks();

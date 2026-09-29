@@ -179,7 +179,10 @@ installer when needed. This package does not turn a flat game into VR.
 UEVR-specific AFW projection and rendering-mode callbacks remain available
 through the Cheeky UEVR plugin. Use that integration for its AFW host controls.
 Native OpenVR uses the game's existing OpenVR session and the built-in adapter;
-it does not require the OpenXR layer.
+it does not require the OpenXR layer. LibOVR games, including R.E.A.L. VR with
+`PreferredAPI2=1` on Pimax, likewise use the game's loaded LibOVR runtime and,
+for Pimax eye tracking, its existing PVR session; see
+[LibOVR games and Pimax eye tracking](../USAGE.md#libovr-games-and-pimax-eye-tracking).
 
 ## Loader behavior and current limits
 

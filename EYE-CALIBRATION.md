@@ -1,7 +1,7 @@
 # Automatic eye calibration
 
-Cheeky follows marked DLSS outputs to the physical eyes submitted to OpenVR or
-OpenXR. The sharp region can then follow the correct eye when videos, menus or
+Cheeky follows marked DLSS outputs to the physical eyes submitted to OpenVR,
+OpenXR or LibOVR. The sharp region can then follow the correct eye when videos, menus or
 scenes change the order of the game's stereo views. Calibration starts enabled
 when a host attaches, independently of DLSS-SR's foveation switch. By default it
 calibrates once, confirms the result, then stops stamping and capturing until a
@@ -64,10 +64,26 @@ eye calibration** in their Stereo / Gaze controls. A support ZIP requested while
 calibration is retained may have no new calibration images until acquisition is
 requested or a monitored change occurs.
 
-| Graphics API | OpenVR | Native OpenXR |
-| --- | --- | --- |
-| D3D11 | Separate, packed/flipped bounds, array slices | Separate, packed projection rectangles, array slices |
-| D3D12 | Separate, packed/flipped bounds, array slices | Separate, packed projection rectangles, array slices |
+| Graphics API | OpenVR | Native OpenXR | LibOVR |
+| --- | --- | --- | --- |
+| D3D11 | Separate, packed/flipped bounds, array slices | Separate, packed projection rectangles, array slices | Separate or shared swap chains, EyeFov viewports |
+| D3D12 | Separate, packed/flipped bounds, array slices | Separate, packed projection rectangles, array slices | Not supported |
+
+LibOVR (Oculus PC SDK, including Pimax's compatibility runtime) follows the
+native OpenXR D3D11 policy, including alternating-eye hosts: a swap-chain commit
+is the image release where patches are captured, and `ovr_EndFrame` (or
+`ovr_SubmitFrame`) closes the interval with the first stereo EyeFov-family
+layer. When a frame commits only one eye and resubmits the other eye's previous
+image (R.E.A.L. VR's legacy AER), the interval stays open for one more frame so
+the other eye's commit completes the pair. It is built into the add-on, plugin
+and standalone runtime; no layer is installed. Layers with a bottom-left
+texture origin are not used.
+
+The LibOVR column describes the submitted swap-chain API. D3D12-rendered
+sources transferred into D3D11 LibOVR swap chains use the existing mixed-API
+calibration path; this is distinct from native D3D12 LibOVR submissions.
+Vulkan-to-LibOVR and native Vulkan LibOVR submissions have not been validated;
+Vulkan support work is deferred.
 
 The same calibration core is shared by ReShade, UEVR, standalone and OptiScaler. Native OpenXR needs the
 **matching updated Cheeky OpenXR layer** installed using

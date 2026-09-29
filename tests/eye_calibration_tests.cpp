@@ -54,6 +54,55 @@ void test_wide_search() {
     require(!calibration_search(image, targets).valid, "Flat or missing markers must never lock");
     std::cout << "PASS wide marker search: displacement, independent scale, edge preference, ambiguity and flip\n";
 }
+void test_grid_locator_scale() {
+    // Retained-calibration epoch 68: this word admitted a false vertical flip
+    // near (165,165), with cell height 6.956 instead of the actual 8 pixels.
+    constexpr std::array<std::uint32_t, 2> bases{686538, 22824562};
+    std::vector<CalibrationSearchTarget> targets;
+    for (unsigned c = 0; c < 2; ++c) {
+        const auto points = calibration_marker_points(calibration_grid_plan(496, 512), 0, 0, 496, c, bases[c]);
+        for (unsigned i = 0; i < points.count; ++i) targets.push_back({points.points[i], c, 496, 512});
+    }
+    require(targets[21].marker.code == 4611820, "Reproduce the retained-calibration marker word");
+    CalibrationSearchImage image;
+    image.width = image.height = 512;
+    image.original_width = image.original_height = 512;
+    const auto render = [&](bool flip, bool mixed = false) {
+        image.pixels.assign(image.width * image.height, .2F);
+        for (unsigned i = 0; i < 16; ++i) {
+            const unsigned candidate = mixed && i % 4 < 2 ? 0 : 1;
+            const auto& marker = targets[candidate * 16 + i].marker;
+            for (unsigned y = 0; y < 72; ++y) for (unsigned x = 0; x < 72; ++x) {
+                unsigned char pixel[4]{};
+                calibration_encode_locator(pixel, DXGI_FORMAT_R8G8B8A8_UNORM, candidate, x, y, marker.code, true);
+                const unsigned sx = marker.x - 16 + x, sy = marker.y - 16 + y;
+                image.pixels[(flip ? image.height - 1 - sy : sy) * image.width + sx] = pixel[0] / 255.F;
+            }
+        }
+    };
+    CalibrationSearchOptions options; options.require_grid = true;
+    for (bool flip : {false, true}) {
+        render(flip);
+        const auto found = calibration_search(image, targets, nullptr, options);
+        require(found.valid && !found.ambiguous && found.candidate == 1 && found.flipped == flip &&
+            found.support_points >= 3, "Locator rings must reject partial-code flips without losing a genuine grid");
+        require(std::abs(found.placement.width - 512) < 12 && std::abs(found.placement.height - 512) < 12,
+            "Grid acquisition must recover the actual scale after rejecting a partial-code fit");
+    }
+    render(false, true);
+    const auto mixed = calibration_search(image, targets, nullptr, options);
+    require(!mixed.valid && mixed.ambiguous, "Authentic locator rings cannot excuse conflicting source identities");
+    render(false);
+    // Reflect half the actual markers, preserving their complete locator rings.
+    for (unsigned y = 0; y < image.height; ++y)
+        for (unsigned x = 256; x < image.width; ++x)
+            if (y < image.height / 2) std::swap(image.pixels[y * image.width + x],
+                image.pixels[(image.height - 1 - y) * image.width + x]);
+    const auto conflicting_flip = calibration_search(image, targets, nullptr, options);
+    require(!conflicting_flip.valid && conflicting_flip.ambiguous,
+        "Conflicting genuine orientations must still reject grid acquisition");
+    std::cout << "PASS grid locator scale: partial-code flip rejection, real flips and genuine ambiguity\n";
+}
 void test_hogwarts_corner_pair() {
     // Support 13844: source 3440x1440, submitted eye 1493x1440.
     // Reconstruct codes to test clipping/corner choice without lossy ZIP previews.
@@ -693,6 +742,10 @@ void run_calibration_policy() {
     unregister_stereo_view(8002);
 }
 } // namespace
+int run_calibration_search_tests() {
+    try { test_wide_search(); test_grid_locator_scale(); return 0; }
+    catch (const std::exception& e) { std::cerr << "Calibration search: " << e.what() << '\n'; return 1; }
+}
 int run_crop_calibration_tests() {
     try { test_wide_search(); test_hogwarts_corner_pair(); test_hogwarts_tracking(); test_cyberpunk_capture_search(); crop_calibration11(); return 0; }
     catch (const std::exception& e) { std::cerr << "Crop calibration: " << e.what() << '\n'; eye_calibration_stop(); return 1; }
@@ -739,6 +792,7 @@ int run_stereo_support_tests() {
 int run_eye_calibration_tests() {
     try {
         test_wide_search();
+        test_grid_locator_scale();
         test_hogwarts_corner_pair();
         test_hogwarts_tracking();
         test_cyberpunk_capture_search();

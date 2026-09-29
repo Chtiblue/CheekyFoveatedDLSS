@@ -125,7 +125,8 @@ inline std::string support_summary(const std::string& system,
     row("OpenXR", "abi_compatible", "Compatible ABI");
     row("OpenXR", "using_gaze", "Using gaze");
     const auto source_name = [](const std::string& source) {
-        return source == "0" ? "Manual fallback" : source == "1" ? "Streamline" : source == "2" ? "OpenXR" : "Unknown";
+        return source == "0" ? "Manual fallback" : source == "1" ? "Streamline" : source == "2" ? "OpenXR" :
+            source == "3" ? "OpenVR" : source == "4" ? "LibOVR" : "Unknown";
     };
     out << "Alignment source: " << source_name(get("OpenXR", "alignment_source")) << '\n';
     row("OpenXR", "mapping_ambiguous", "Mapping ambiguous");
@@ -143,7 +144,9 @@ inline std::string support_summary(const std::string& system,
             std::pair{CHEEKY_GAZE_STATUS_MAPPING_READY, "Mapping ready"},
             std::pair{CHEEKY_GAZE_STATUS_UNSUPPORTED_VIEW_CONFIG, "Unsupported view configuration"},
             std::pair{CHEEKY_GAZE_STATUS_AMBIGUOUS_RESOURCE, "Ambiguous resource"},
-            std::pair{CHEEKY_GAZE_STATUS_SIMULATED, "Simulated gaze"}})
+            std::pair{CHEEKY_GAZE_STATUS_SIMULATED, "Simulated gaze"},
+            std::pair{CHEEKY_GAZE_STATUS_OPENVR, "OpenVR adapter"},
+            std::pair{CHEEKY_GAZE_STATUS_LIBOVR, "LibOVR adapter"}})
             out << flag.second << ": " << ((flags & flag.first) ? "yes" : "no") << '\n';
     }
     for (const auto eye : {"Eye 0", "Eye 1"}) {

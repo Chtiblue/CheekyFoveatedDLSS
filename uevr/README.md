@@ -48,9 +48,9 @@ enabled; **Paper white** appears for HDR NR input.
 
 ## Compatibility
 
-Use Native Stereo first. Other stereo modes need game-specific testing. D3D11 uses the direct processing path; D3D11-to-D3D12 transport and D3D11 DLSS-NR are not available through the plugin.
+Use Native Stereo first. Other stereo modes need game-specific testing. D3D11 uses direct processing by default. To use DLSS-NR on D3D11, enable **DX11 -> DX12 transport** under **DLSS-NR (experimental)**, then enable NR. Transport also supports SR without NR. This path still needs in-game UEVR/headset validation.
 
-For D3D12 DLSS-NR, place a compatible `nvngx_dlssnr.dll` beside the nested runtime DLL or the actual game executable. NVIDIA binaries are not included. Use **Reset NR history / retry** after adding it.
+For DLSS-NR (native D3D12 or D3D11 transport), place a compatible `nvngx_dlssnr.dll` beside the nested runtime DLL or the actual game executable. NVIDIA binaries are not included. Use **Reset NR history / retry** after adding it.
 
 Updating either DLL requires a full game restart. Reloading the adapter does not unload the resident runtime.
 

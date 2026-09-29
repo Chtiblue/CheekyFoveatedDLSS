@@ -47,6 +47,52 @@ Lua tests require `lupa==2.8`, installed in the Python environment or `build/tes
 
 GPU and host tests complement game/headset testing; they do not establish compatibility or performance in every game.
 
+`CheekyTests --libovr-policy` checks mixed OpenVR/LibOVR gaze selection,
+invalid PVR samples and calibration ownership across OpenVR, OpenXR and LibOVR.
+`CheekyTests --libovr-transfer` checks retained calibration with both D3D11
+and D3D12 sources feeding LibOVR D3D11 submissions. These checks do not add
+native LibOVR D3D12 swap-chain calibration. LibOVR Vulkan work is deferred:
+no native LibOVR Vulkan implementation or validation is included. The standard
+suite still exercises the existing Vulkan paths.
+
+`CheekyTests --calibration-search` reproduces a partial-code match that falsely
+resembled a flipped grid marker during resize reacquisition. Refined grid hits
+must match the locator's white/black rings; genuine conflicting identities and
+orientations still reject acquisition. The seven retained-calibration paths,
+including OpenXR and LibOVR D3D12-to-D3D11 transfers, pass this regression.
+Acquisition failures print the API/backend, geometry and calibration diagnostics;
+do not assume the 10-second deadline means GPU load.
+
+UEVR default and `--dx11` tests distinguish the stored full-search retention
+preference from Auto corner calibration's effective continuous validation.
+Core alias discovery fixtures explicitly select the higher D3D12 hook because
+their synthetic core has no lower SR runtime, and wait for the complete D3D12
+callback set before invoking cached exports.
+
+`CheekyRuntimeHostTests --libovr` (also `--libovr-legacy`, `--libovr-late`,
+`--libovr-borrowed` and `--libovr-copied-table`) loads synthetic
+`LibOVRRT64_1.dll` and `LibPVRClient64.dll` fixtures before the runtime, as a
+LibOVR game on Pimax would. They cover export discovery, both layer header
+layouts, a missed `ovr_Initialize`, swap-chain reference ownership, PVR session
+capture through the interface table or its implementations, gaze sampling and
+LibOVR-driven calibration frames. They do not validate Pimax hardware, Pimax
+Play's compatibility runtime or R.E.A.L. VR. `CheekyTests --libovr-aer-calibration`
+commits one eye per LibOVR frame, as R.E.A.L. VR's legacy AER does, and checks
+that calibration pairs the commits across frames.
+
+The `--libovr` runtime-host case also exercises real NGX and LibOVR hooks with
+three rotating swap-chain images: alternate-eye acquisition, switching to
+ordinary stereo, failed commits/submissions, and recreation during an open pair.
+It runs for standalone and OptiScaler. These are WARP/fixture checks; BG3 on a
+Pimax headset still needs validation with both AER modes and menu transitions.
+
+DX11 late-attachment tests cover stale output dimensions after feature creation,
+with and without peripheral DLAA, plus parameter restoration after native
+success and failure. Late-adopted features keep their input and output dimensions
+until their creation contract is observed. The transport fixtures read back the
+entire output after a stale query, including with peripheral DLAA enabled.
+Native LibOVR D3D12 swap chains and LibOVR Vulkan remain outside these changes.
+
 ## Packaging
 
 ```powershell
