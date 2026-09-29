@@ -702,6 +702,9 @@ void calibration12_retired(ID3D12GraphicsCommandList* list) noexcept {
     if (list && !internal_work)
         retire(list_id(list, false));
 }
+bool calibration12_tagged(ID3D12GraphicsCommandList* list) noexcept {
+    return list && list_id(list, false) != 0;
+}
 bool calibration12_internal_work() noexcept {
     return internal_work;
 }

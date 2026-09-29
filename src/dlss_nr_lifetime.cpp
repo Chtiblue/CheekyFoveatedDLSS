@@ -134,6 +134,9 @@ void nr_recording_submitted(ID3D12CommandQueue* queue, ID3D12Object* list, NrSig
     found->needs_signal = true;
     signal_point(recording, *found, submit_signal ? submit_signal : signal);
 }
+bool nr_recording_tagged(ID3D12Object* list) noexcept {
+    return list && identity(list) != nullptr;
+}
 void nr_recording_reset(ID3D12Object* list, HRESULT result) noexcept {
     if (FAILED(result)) return;
     std::lock_guard execution_lock(calibration12_execution_mutex());

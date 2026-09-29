@@ -50,6 +50,9 @@ bool calibration12_capture(Calibration12Frame&, ID3D12CommandQueue*, ID3D12Resou
 Calibration12Readback calibration12_poll(Calibration12Frame&, bool source_only = false, unsigned source_mask = 3) noexcept;
 void calibration12_submitted(ID3D12CommandQueue*, ID3D12GraphicsCommandList*) noexcept;
 void calibration12_retired(ID3D12GraphicsCommandList*) noexcept;
+// Whether the list carries a calibration recording identity. Reads private data
+// only, so it takes no lock and is safe from any thread.
+bool calibration12_tagged(ID3D12GraphicsCommandList*) noexcept;
 bool calibration12_internal_work() noexcept;
 // Serialize Execute/Reset with readback retirement, including forwarding wrappers.
 std::recursive_mutex& calibration12_execution_mutex() noexcept;

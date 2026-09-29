@@ -9,8 +9,11 @@
 #include <dxgi1_4.h>
 #include <d3d12sdklayers.h>
 #include <wrl/client.h>
+#include <chrono>
+#include <future>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 // This executable links the real native observer and NR lifetime/input code.
 // Unrelated gaze/timing/calibration consumers are inert; NVIDIA evaluation is
@@ -34,6 +37,7 @@ std::recursive_mutex& calibration12_execution_mutex() noexcept {
 }
 void calibration12_submitted(ID3D12CommandQueue*, ID3D12GraphicsCommandList*) noexcept {}
 void calibration12_retired(ID3D12GraphicsCommandList*) noexcept {}
+bool calibration12_tagged(ID3D12GraphicsCommandList*) noexcept { return false; }
 int nr_test_evaluations{};
 bool nr_test_succeeds{true};
 DlssNrFrame nr_test_frame{};
@@ -273,6 +277,49 @@ int run_wrapped_tests(bool streamline) {
         std::cout << "PASS wrapped presentation/native NGX lifetime\n"; return 0;
     } catch(const std::exception& e){ std::cerr << "FAIL wrapped observer: " << e.what() << '\n'; return 1; }
 }
+// A game thread can hold the execution mutex across a forwarding wrapper's
+// Execute that blocks on another thread (R.E.A.L. VR waits for its VR thread).
+// That thread's own D3D12 work - an OpenXR layer's private device - reaches the
+// same process-wide hooks and must not wait for the mutex. Recorded NR work
+// still must.
+int run_foreign_list_tests() {
+    using namespace cheeky::foveated_dlss;
+    try {
+        ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
+        ComPtr<IDXGIAdapter> warp; check(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)));
+        ComPtr<ID3D12Device> device; check(D3D12CreateDevice(warp.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&device)));
+        D3D12_COMMAND_QUEUE_DESC desc{}; ComPtr<ID3D12CommandQueue> queue; check(device->CreateCommandQueue(&desc,IID_PPV_ARGS(&queue)));
+        require(initialize_native_observer(device.Get(),queue.Get()),"Native observer initialization failed");
+        ComPtr<ID3D12CommandAllocator> allocator; check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)));
+        ComPtr<ID3D12GraphicsCommandList> foreign; check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&foreign)));
+        check(foreign->Close());
+        ComPtr<ID3D12CommandAllocator> nr_allocator; check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&nr_allocator)));
+        ComPtr<ID3D12GraphicsCommandList> recorded; check(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,nr_allocator.Get(),nullptr,IID_PPV_ARGS(&recorded)));
+        require(ensure_dlss_nr_recording(recorded.Get()),"NR recording identity failed");
+        check(recorded->Close());
+
+        std::promise<void> held, release;
+        auto release_signal=release.get_future().share();
+        std::thread holder([&]{
+            std::lock_guard lock(calibration12_execution_mutex());
+            held.set_value();
+            release_signal.wait();
+        });
+        held.get_future().wait();
+        auto foreign_work=std::async(std::launch::async,[&]{
+            check(foreign->Reset(allocator.Get(),nullptr)); check(foreign->Close());
+            ID3D12CommandList* lists[]{foreign.Get()}; queue->ExecuteCommandLists(1,lists);
+        });
+        const bool foreign_done=foreign_work.wait_for(std::chrono::seconds(5))==std::future_status::ready;
+        auto recorded_work=std::async(std::launch::async,[&]{ check(recorded->Reset(nr_allocator.Get(),nullptr)); });
+        const bool recorded_waited=recorded_work.wait_for(std::chrono::milliseconds(200))==std::future_status::timeout;
+        release.set_value(); holder.join(); foreign_work.get(); recorded_work.get();
+        check(recorded->Close());
+        require(foreign_done,"Untracked list Reset/Execute waited for a mutex held by another thread");
+        require(recorded_waited,"NR-recorded list Reset no longer serializes with the execution mutex");
+        std::cout<<"PASS untracked lists bypass the execution mutex, recorded lists keep it\n"; return 0;
+    } catch(const std::exception& e){std::cerr<<"FAIL foreign list: "<<e.what()<<'\n';return 1;}
+}
 int run_probe_tests() {
     using namespace cheeky::foveated_dlss;
     try {
@@ -313,6 +360,7 @@ int main(int argc, char** argv) {
     if (argc==2 && std::strcmp(argv[1],"--wrapped-reshade")==0) return run_wrapped_tests(false);
     if (argc==2 && std::strcmp(argv[1],"--wrapped-streamline")==0) return run_wrapped_tests(true);
     if (argc==2 && std::strcmp(argv[1],"--probe")==0) return run_probe_tests();
+    if (argc==2 && std::strcmp(argv[1],"--foreign-list")==0) return run_foreign_list_tests();
     cheeky::foveated_dlss::Settings settings;
     settings.enabled = false;
     settings.nr_enabled = false;
@@ -320,6 +368,8 @@ int main(int argc, char** argv) {
     cheeky::foveated_dlss::update_settings(settings);
     const auto probe = run_probe_tests();
     if (probe) return probe;
+    const auto foreign = run_foreign_list_tests();
+    if (foreign) return foreign;
     const auto lifetime = run_nr_lifetime_tests();
     return lifetime ? lifetime : run_d3d12_composite_tests();
 }
