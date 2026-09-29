@@ -295,28 +295,45 @@ void release_slot(TransportSlot& slot) noexcept {
 }
 
 void drain_transport_work(TransportDevice& device, const std::uint64_t pending) noexcept {
-    // A removed device reports UINT64_MAX; nothing is still executing.
-    if (!pending || device.fence12 == nullptr || device.fence12->GetCompletedValue() >= pending) return;
-    // The private queue may wait on DX11 signals still buffered in the
-    // immediate context.
+    if (!pending) return; // No private submissions (including partial initialization).
+    // Teardown also releases global SR/NR resources immediately after this
+    // returns. A timeout cannot safely defer just the transport slots.
+    // Keep every owner alive until completion or confirmed device removal.
+    const auto removed = [&] {
+        return device.device12 && FAILED(device.device12->GetDeviceRemovedReason());
+    };
+    if (removed()) return;
     if (device.device11 != nullptr) {
         ID3D11DeviceContext* context{};
         device.device11->GetImmediateContext(&context);
         if (context != nullptr) {
+            // Private work can wait on a DX11 signal still buffered here.
             context->Flush();
             context->Release();
         }
     }
-    const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (event != nullptr) {
-        if (SUCCEEDED(device.fence12->SetEventOnCompletion(pending, event)))
-            static_cast<void>(WaitForSingleObject(event, 2000U));
-        CloseHandle(event);
+    // Fence the queue again: the final NR submission may have executed even
+    // when its Signal failed, leaving the slot's previous done_value stale.
+    const auto target = device.next_fence_value++;
+    bool signaled{};
+    bool warned{};
+    const auto start = GetTickCount64();
+    for (;;) {
+        if (removed()) return;
+        if (!signaled && device.queue12 && device.fence12)
+            signaled = SUCCEEDED(device.queue12->Signal(device.fence12, target));
+        const auto completed = device.fence12 ? device.fence12->GetCompletedValue() : 0;
+        if (signaled && completed >= target) return;
+        if (!warned && GetTickCount64() - start >= 2000U) {
+            trace_event("Transport release still waiting for private DX12 work fence=%llu completed=%llu signaled=%u; retaining resources",
+                static_cast<unsigned long long>(target), static_cast<unsigned long long>(completed),
+                signaled ? 1U : 0U);
+            warned = true;
+        }
+        // Polling needs no event allocation/registration, and never leaves a
+        // pending completion notification referring to a closed event handle.
+        Sleep(1);
     }
-    const auto completed = device.fence12->GetCompletedValue();
-    if (completed < pending)
-        trace_event("Transport release timed out waiting for private DX12 work fence=%llu completed=%llu",
-            static_cast<unsigned long long>(pending), static_cast<unsigned long long>(completed));
 }
 
 void release_device(TransportDevice& device) noexcept {

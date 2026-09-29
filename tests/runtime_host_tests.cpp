@@ -8,6 +8,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -262,7 +263,7 @@ void verify_libovr(unsigned mode, HMODULE libovr, HMODULE pvr, CheekyRuntimeSnap
 
 void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn get,
     std::uint64_t attachment, ID3D11Device* device, ID3D11DeviceContext* context, HMODULE ngx,
-    const std::filesystem::path& log_path,bool depth24=false,bool backpressure=false,bool init_failure=false, const std::filesystem::path& game_feature_directory={}) {
+    const std::filesystem::path& log_path,bool depth24=false,bool backpressure=false,bool init_failure=false, const std::filesystem::path& game_feature_directory={}, bool release_drain=false) {
     using namespace cheeky::foveated_dlss;
     using Init = NgxResult (*)(unsigned long long, const wchar_t*, ID3D11Device*, const void*, unsigned);
     using Create = NgxResult (*)(ID3D11DeviceContext*, unsigned, NgxParameters*, NgxHandle**);
@@ -391,7 +392,7 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
     require(proc<unsigned(*)()>(core_runtime, "CheekyFakeCreates")() == 0 &&
         proc<unsigned(*)()>(core_runtime, "CheekyFakeEvaluates")() == 0,
         "Private transport SR must bypass the game's core feature hooks");
-    if (backpressure) {
+    if (backpressure || release_drain) {
         // Hold GPU work behind a CPU-signaled fence, filling all three slots.
         // The fourth evaluation must wait for a slot, not silently omit NR.
         ComPtr<ID3D11Device5> device5;
@@ -431,6 +432,36 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
                 }
                 require(done == S_OK, "Drain backpressure warmup");
             }
+            if (release_drain) {
+                require(SUCCEEDED(context4->Wait(gate11.Get(), order + 1)), "Hold work during feature release");
+                // The gate is always released, even if evaluation/assertions fail.
+                // Start the delay at ReleaseFeature so a slow evaluation cannot
+                // consume the two-second regression window.
+                std::atomic<bool> releasing{};
+                std::jthread release_gate([gate12, order, &releasing](std::stop_token stop) {
+                    while (!releasing.load() && !stop.stop_requested()) Sleep(1);
+                    if (!stop.stop_requested()) Sleep(2300);
+                    gate12->Signal(order + 1);
+                });
+                parameters.values = original_parameters;
+                require(ngx_succeeded(evaluate(context, handle, &parameters, nullptr)), "Queue work before feature release");
+                // Do not Flush here: release must flush DX11's buffered signals.
+                const auto start = GetTickCount64();
+                releasing = true;
+                const auto result = release(handle);
+                const auto elapsed = GetTickCount64() - start;
+                const bool gate_completed = gate12->GetCompletedValue() >= order + 1;
+                release_gate.join();
+                require(ngx_succeeded(result), "Release transported feature after draining");
+                require(gate_completed && elapsed >= 2000,
+                    "Release must retain GPU resources beyond the old two-second timeout");
+                if (order == 0) {
+                    parameters.values = original_parameters;
+                    require(ngx_succeeded(proc<Create>(ngx, "NVSDK_NGX_D3D11_CreateFeature")(
+                        context, 1, &parameters, &handle)), "Recreate feature after draining Before NR");
+                }
+                continue;
+            }
             const auto before = snapshot(get);
             const auto nr_begin = before.find("\"nr_details\":");
             const auto evaluations = field(before.substr(nr_begin), "evaluations");
@@ -450,6 +481,10 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
             const auto after = snapshot(get);
             require(field(after.substr(after.find("\"nr_details\":")), "evaluations") == evaluations + 4,
                 "Every backlogged frame evaluates NR");
+        }
+        if (release_drain) {
+            puts("PASS feature release drains Before/After NR beyond two seconds with buffered DX11 signals");
+            return;
         }
         release(handle);
         puts("PASS GPU backlog preserves transport and Before/After NR on every frame");
@@ -563,7 +598,7 @@ void verify_transport(CheekyRuntimeCommandFn command, CheekyRuntimeSnapshotFn ge
 int main(int argc, char** argv) {
     try {
         bool ota_transport{}, ota_only{};
-        bool uevr{}, dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{};
+        bool uevr{}, dx11{}, conflict{}, optiscaler{}, transport{}, forwarded_transport{},depth24{},backpressure{},init_failure{},release_drain{};
         unsigned openvr_version{}, libovr_mode{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
@@ -581,6 +616,7 @@ int main(int argc, char** argv) {
             else if (arg == "--transport") { transport = true; dx11 = true; }
             else if (arg == "--transport-init-failure") { transport = dx11 = init_failure = true; }
             else if (arg == "--transport-depth24") { transport = dx11 = depth24 = true; }
+            else if (arg == "--transport-release-drain") { transport = dx11 = release_drain = true; }
             else if (arg == "--transport-backpressure") { transport = dx11 = backpressure = true; }
             else if (arg == "--transport-forwarded") { transport = true; dx11 = true; forwarded_transport = true; }
             else if (arg.starts_with("--openvr-late-")) {
@@ -787,7 +823,7 @@ int main(int argc, char** argv) {
             require(contains(snapshot(get), "Cached runtime loaded; use not observed"), "Loading alone does not claim override active");
         }
         if (transport) verify_transport(command, get, attachment, device11.Get(), context11.Get(), fake_ngx,
-            directory / (uevr ? "CheekyFoveatedDLSS-UEVR.log" : optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{});
+            directory / (uevr ? "CheekyFoveatedDLSS-UEVR.log" : optiscaler ? "CheekyFoveatedDLSS-OptiScaler.log" : "CheekyFoveatedDLSS-Standalone.log"),depth24,backpressure,init_failure, ota_only ? directory / "runtime" : std::filesystem::path{}, release_drain);
         if (ota_transport) {
             require(contains(snapshot(get), "Active (NVIDIA cached runtime)"), "Override status follows actual OTA evaluations");
             detach(attachment);
