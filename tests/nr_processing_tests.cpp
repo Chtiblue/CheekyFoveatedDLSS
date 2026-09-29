@@ -121,6 +121,51 @@ int run_nr_processing_tests() {
             std::abs(dx - 8.0F / 960.0F) < 0.000001F,
             "Moving NR crop does not reproject a stationary scene point");
         {
+            // BG3's DX11 transport: a 1728x1080 region of 7824x4880 output and
+            // 5216x3253 render. Following gaze, the copied guides' origin and
+            // rounded extent change on almost every frame; that reset NR
+            // history about every other frame and made the region shimmer.
+            const DlssNrHistoryGeometry at{1152U, 720U, 7824U, 4880U, 7824U, 4880U,
+                1152U, 720U, 1152U, 720U, 0U, 0U, 0U, 0U, 0U, 0U,
+                5216U, 3253U, 5216U, 3253U, 1973U, 1034U, 1973U, 1034U, false, true};
+            auto moved = at;
+            moved.input_width = moved.depth_width = moved.motion_width = 1153U;
+            moved.input_height = moved.depth_height = moved.motion_height = 721U;
+            moved.motion_copy_x = moved.depth_copy_x = 1978U;
+            moved.motion_copy_y = moved.depth_copy_y = 1040U;
+            const auto base = dlss_nr_history_signature(7U, at);
+            require(dlss_nr_history_signature(7U, moved) == base,
+                "Moving a transport NR region must keep its history");
+            auto resized = at; resized.depth_full_width = 5000U;
+            auto processing = at; processing.processing_width = 3912U;
+            auto jittered = at; jittered.motion_vectors_jittered = true;
+            require(dlss_nr_history_signature(7U, resized) != base &&
+                dlss_nr_history_signature(7U, processing) != base &&
+                dlss_nr_history_signature(7U, jittered) != base && dlss_nr_history_signature(8U, at) != base,
+                "Full-view, processing, jitter and settings changes must still reset NR history");
+            // Full-view guides are unchanged: every geometry field still counts.
+            const auto legacy = [](std::uint64_t s, const DlssNrHistoryGeometry& g) {
+                for (const auto d : {g.input_width, g.input_height, g.output_width, g.output_height,
+                        g.processing_width, g.processing_height, g.depth_width, g.depth_height,
+                        g.motion_width, g.motion_height, g.color_base_x, g.color_base_y,
+                        g.depth_base_x, g.depth_base_y, g.motion_base_x, g.motion_base_y}) {
+                    s ^= d; s *= 1099511628211ULL;
+                }
+                s ^= g.motion_vectors_jittered ? 1U : 0U;
+                for (const auto d : {g.motion_full_width, g.motion_full_height, g.depth_full_width,
+                        g.depth_full_height, g.motion_copy_x, g.motion_copy_y, g.depth_copy_x, g.depth_copy_y}) {
+                    s *= 1099511628211ULL; s ^= d;
+                }
+                return s;
+            };
+            auto full_view = at; full_view.color_is_region = false;
+            auto full_view_moved = moved; full_view_moved.color_is_region = false;
+            require(dlss_nr_history_signature(7U, full_view) == legacy(7U, full_view) &&
+                dlss_nr_history_signature(7U, full_view_moved) == legacy(7U, full_view_moved) &&
+                dlss_nr_history_signature(7U, full_view) != dlss_nr_history_signature(7U, full_view_moved),
+                "Full-view NR guides must keep their previous history signature");
+        }
+        {
             MockNgxParameters missing;
             { NgxNrInputSubstitution unchanged(&missing, nullptr, nullptr, true); }
             require(missing.values.empty(), "NR fallback invented missing host parameters");

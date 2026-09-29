@@ -35,6 +35,33 @@ bool dlss_nr_motion_offset(const DlssNrHistory& previous,
     return std::isfinite(x) && std::isfinite(y);
 }
 
+std::uint64_t dlss_nr_history_signature(
+    std::uint64_t signature,
+    const DlssNrHistoryGeometry& g
+) noexcept {
+    const auto moving = [&g](const std::uint32_t value) noexcept {
+        return g.color_is_region ? 0U : value;
+    };
+    // Guides can change resolution/origin while the working texture stays the
+    // same size (e.g. output-resolution motion with dynamic display sizing).
+    for (const auto dimension : {moving(g.input_width), moving(g.input_height),
+            g.output_width, g.output_height, g.processing_width, g.processing_height,
+            moving(g.depth_width), moving(g.depth_height), moving(g.motion_width), moving(g.motion_height),
+            g.color_base_x, g.color_base_y, g.depth_base_x, g.depth_base_y,
+            g.motion_base_x, g.motion_base_y}) {
+        signature ^= dimension;
+        signature *= 1099511628211ULL;
+    }
+    signature ^= g.motion_vectors_jittered ? 1U : 0U;
+    for (const auto dimension : {g.motion_full_width, g.motion_full_height,
+            g.depth_full_width, g.depth_full_height, moving(g.motion_copy_x),
+            moving(g.motion_copy_y), moving(g.depth_copy_x), moving(g.depth_copy_y)}) {
+        signature *= 1099511628211ULL;
+        signature ^= dimension;
+    }
+    return signature;
+}
+
 DlssNrResourceBase dlss_nr_resource_base(
     const std::uint32_t local_x,
     const std::uint32_t local_y,

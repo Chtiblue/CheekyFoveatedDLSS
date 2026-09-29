@@ -1123,24 +1123,15 @@ bool evaluate_dlss_nr(
         );
 
     auto* const parameters = view.parameters;
-    auto signature = nr_settings_signature(settings, region);
-    // Guides can change resolution/origin while the working texture stays the
-    // same size (e.g. output-resolution motion with dynamic display sizing).
-    for (const auto dimension : {frame.input_width, frame.input_height,
-            frame.output_width, frame.output_height, processing_width, processing_height,
-            frame.depth_width, frame.depth_height, frame.motion_width, frame.motion_height,
-            frame.color_base_x, frame.color_base_y, frame.depth_base_x, frame.depth_base_y,
-            frame.motion_base_x, frame.motion_base_y}) {
-        signature ^= dimension;
-        signature *= 1099511628211ULL;
-    }
-    signature ^= frame.motion_vectors_jittered ? 1U : 0U;
-    for (const auto dimension : {frame.motion_full_width, frame.motion_full_height,
-            frame.depth_full_width, frame.depth_full_height, frame.motion_copy_x,
-            frame.motion_copy_y, frame.depth_copy_x, frame.depth_copy_y}) {
-        signature *= 1099511628211ULL;
-        signature ^= dimension;
-    }
+    const auto signature = dlss_nr_history_signature(nr_settings_signature(settings, region), {
+        frame.input_width, frame.input_height, frame.output_width, frame.output_height,
+        processing_width, processing_height,
+        frame.depth_width, frame.depth_height, frame.motion_width, frame.motion_height,
+        frame.color_base_x, frame.color_base_y, frame.depth_base_x, frame.depth_base_y,
+        frame.motion_base_x, frame.motion_base_y,
+        frame.motion_full_width, frame.motion_full_height, frame.depth_full_width, frame.depth_full_height,
+        frame.motion_copy_x, frame.motion_copy_y, frame.depth_copy_x, frame.depth_copy_y,
+        frame.motion_vectors_jittered, frame.color_is_region});
     const auto reset_generation = requested_nr_reset_generation.load(
         std::memory_order_acquire
     );

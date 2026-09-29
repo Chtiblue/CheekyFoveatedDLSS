@@ -113,6 +113,27 @@ struct DlssNrMotionAxis {
 [[nodiscard]] bool dlss_nr_motion_offset(const DlssNrHistory& previous,
     const DlssNrHistory& current, float& x, float& y) noexcept;
 
+// Frame geometry whose change invalidates DLSS-NR history.
+struct DlssNrHistoryGeometry {
+    std::uint32_t input_width{}, input_height{}, output_width{}, output_height{};
+    std::uint32_t processing_width{}, processing_height{};
+    std::uint32_t depth_width{}, depth_height{}, motion_width{}, motion_height{};
+    std::uint32_t color_base_x{}, color_base_y{}, depth_base_x{}, depth_base_y{};
+    std::uint32_t motion_base_x{}, motion_base_y{};
+    std::uint32_t motion_full_width{}, motion_full_height{}, depth_full_width{}, depth_full_height{};
+    std::uint32_t motion_copy_x{}, motion_copy_y{}, depth_copy_x{}, depth_copy_y{};
+    bool motion_vectors_jittered{};
+    bool color_is_region{};
+};
+
+// Combines nr_settings_signature() with the frame geometry. Region crops (the
+// DX11 transport) copy guides at the region's position, so their copy origin
+// and rounded input/guide extents change whenever a gaze-following region
+// moves. Region moves are compensated through DlssNrHistory, and the region
+// size and full-view dimensions still count, so those values are excluded.
+[[nodiscard]] std::uint64_t dlss_nr_history_signature(
+    std::uint64_t settings_signature, const DlssNrHistoryGeometry& geometry) noexcept;
+
 // color_is_region means the texture already contains only the NR crop, whose
 // resource origin is zero. Otherwise add the eye/output base to the crop offset.
 [[nodiscard]] DlssNrResourceBase dlss_nr_resource_base(
