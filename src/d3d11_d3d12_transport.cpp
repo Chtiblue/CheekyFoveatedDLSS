@@ -284,7 +284,45 @@ void release_slot(TransportSlot& slot) noexcept {
     slot = {};
 }
 
+// Slots' allocators and textures, and the view's private DX12 features, may
+// still be referenced by queued private work. D3D12 forbids releasing them
+// before that work completes; NVIDIA's driver bugchecked (0x139, corrupted list
+// entry) when BG3 re-created its DLSS features on closing the save screen.
+[[nodiscard]] std::uint64_t pending_work(const TransportView& view) noexcept {
+    std::uint64_t pending{};
+    for (const auto& slot : view.slots) pending = (std::max)(pending, slot.done_value);
+    return pending;
+}
+
+void drain_transport_work(TransportDevice& device, const std::uint64_t pending) noexcept {
+    // A removed device reports UINT64_MAX; nothing is still executing.
+    if (!pending || device.fence12 == nullptr || device.fence12->GetCompletedValue() >= pending) return;
+    // The private queue may wait on DX11 signals still buffered in the
+    // immediate context.
+    if (device.device11 != nullptr) {
+        ID3D11DeviceContext* context{};
+        device.device11->GetImmediateContext(&context);
+        if (context != nullptr) {
+            context->Flush();
+            context->Release();
+        }
+    }
+    const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (event != nullptr) {
+        if (SUCCEEDED(device.fence12->SetEventOnCompletion(pending, event)))
+            static_cast<void>(WaitForSingleObject(event, 2000U));
+        CloseHandle(event);
+    }
+    const auto completed = device.fence12->GetCompletedValue();
+    if (completed < pending)
+        trace_event("Transport release timed out waiting for private DX12 work fence=%llu completed=%llu",
+            static_cast<unsigned long long>(pending), static_cast<unsigned long long>(completed));
+}
+
 void release_device(TransportDevice& device) noexcept {
+    std::uint64_t pending{};
+    for (const auto& view : device.views) pending = (std::max)(pending, pending_work(view));
+    drain_transport_work(device, pending);
     for (auto& view : device.views) {
         release_peripheral_dlaa_view(view.view_id);
         release_d3d12_view(view.view_id);
@@ -2347,6 +2385,7 @@ void release_d3d11_transport_view(const NgxHandle* const game_handle) noexcept {
         for (auto iterator = device.views.begin();
              iterator != device.views.end(); ++iterator) {
             if (iterator->view_id != view_id) continue;
+            drain_transport_work(device, pending_work(*iterator));
             release_peripheral_dlaa_view(view_id);
             release_d3d12_view(view_id);
             for (auto& slot : iterator->slots) release_slot(slot);
