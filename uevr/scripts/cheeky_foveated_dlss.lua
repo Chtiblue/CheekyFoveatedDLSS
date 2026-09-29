@@ -292,6 +292,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
         end
         if imgui.tree_node("Advanced eye tracking") then
             slider("Gaze smoothing (ms)", "GazeSmoothingMs", 0, 100)
+            slider("Hold gaze on signal loss (ms)", "GazeHoldMs", 0, 1000)
             slider("Crop quantization (pixels)", "GazeQuantizationPixels", 1, 64, true)
             slider("Jump reset threshold", "GazeJumpResetRatio", 0.01, 1)
             imgui.tree_pop()

@@ -111,6 +111,7 @@ std::string settings_text(const Settings& s) {
     out << "simulation_pattern=" << s.simulation_pattern << '\n';
     out << "show_next_jump_target=" << s.show_next_jump_target << '\n';
     out << "gaze_smoothing_ms=" << s.gaze_smoothing_ms << '\n';
+    out << "gaze_hold_ms=" << s.gaze_hold_ms << '\n';
     out << "gaze_quantization_pixels=" << s.gaze_quantization_pixels << '\n';
     out << "gaze_jump_reset_ratio=" << s.gaze_jump_reset_ratio << '\n';
     out << "nr_enabled=" << s.nr_enabled << '\n';

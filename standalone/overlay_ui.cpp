@@ -187,6 +187,8 @@ void draw_gaze(Settings& s) {
     }
     if (s.center_mode != FoveationCenterMode::fixed && ImGui::TreeNode("Advanced eye tracking")) {
         slider("Gaze smoothing", s.gaze_smoothing_ms, 0.0F, 100.0F, "%.0f ms");
+        slider("Hold gaze on signal loss", s.gaze_hold_ms, 0.0F, 1000.0F, "%.0f ms");
+        ImGui::TextDisabled("Covers blinks; longer loss returns to fixed placement.");
         int pixels = static_cast<int>(s.gaze_quantization_pixels);
         ImGui::TextUnformatted("Crop origin quantization");
         ImGui::SetNextItemWidth(-1);

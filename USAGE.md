@@ -35,6 +35,7 @@ The main controls and their defaults are:
 | DX11 game processing path | DX11 Direct | **DX12 Transport** enables DX12-only features for DX11 games. |
 | Foveation center | Fixed | Selects fixed placement, runtime gaze (OpenXR / OpenVR / LibOVR), or simulated gaze. |
 | Gaze smoothing | `20 ms` | Sets the time constant for gaze motion. |
+| Hold gaze on signal loss | `400 ms` | Keeps the last gaze through blinks and short dropouts before returning to fixed placement. |
 | Crop origin quantization | `8 px` | Snaps motion to render-pixel increments. |
 | Jump reset threshold | `0.125 crop` | Resets DLSS history above the larger of 64 px or 12.5% of the crop dimension. |
 
@@ -114,8 +115,9 @@ Valid gaze sets both eye centers directly; it needs no manual stereo X offset.
 and does not shift valid gaze. If tracking is unavailable, a red message appears
 directly below the selector and the add-on falls back to fixed placement, using
 automatic alignment where available and saved manual placement otherwise.
-Temporary signal loss holds the last valid gaze for 100 ms, then returns toward
-the fixed fallback over 150 ms.
+Temporary signal loss, such as a blink, holds the last valid gaze for
+**Hold gaze on signal loss** (default 400 ms, under **Advanced eye tracking**)
+without resetting DLSS history, then returns toward the fixed fallback over 150 ms.
 
 Separate, packed and array-slice submissions can use marker calibration on D3D11 and D3D12. Quad views are not supported. See [Eye calibration](EYE-CALIBRATION.md) for path-specific limits.
 Missing, stale, or ambiguous data also causes fallback. To test motion without an

@@ -842,6 +842,8 @@ void load_settings_from_reshade() noexcept {
         settings.gaze_smoothing_ms
     ));
     static_cast<void>(reshade::get_config_value(
+        nullptr, config_section, "GazeHoldMs", settings.gaze_hold_ms));
+    static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "GazeQuantizationPixels",
         settings.gaze_quantization_pixels
     ));
@@ -1017,6 +1019,8 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
         nullptr, config_section, "GazeSmoothingMs",
         settings.gaze_smoothing_ms
     );
+    reshade::set_config_value(
+        nullptr, config_section, "GazeHoldMs", settings.gaze_hold_ms);
     reshade::set_config_value(
         nullptr, config_section, "GazeQuantizationPixels",
         settings.gaze_quantization_pixels
@@ -1345,6 +1349,17 @@ void draw_sr_controls(Settings& settings, bool& changed) {
             "%.0f ms",
             ImGuiSliderFlags_AlwaysClamp
         );
+        changed |= ImGui::SliderFloat(
+            "Hold gaze on signal loss",
+            &settings.gaze_hold_ms,
+            0.0F,
+            1000.0F,
+            "%.0f ms",
+            ImGuiSliderFlags_AlwaysClamp
+        );
+        ImGui::TextDisabled(
+            "Covers blinks; longer loss returns to fixed placement."
+        );
         int quantization = static_cast<int>(
             settings.gaze_quantization_pixels
         );
@@ -1405,6 +1420,7 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         settings.show_next_jump_target = defaults.show_next_jump_target;
         settings.simulation_pattern = defaults.simulation_pattern;
         settings.gaze_smoothing_ms = defaults.gaze_smoothing_ms;
+        settings.gaze_hold_ms = defaults.gaze_hold_ms;
         settings.gaze_quantization_pixels =
             defaults.gaze_quantization_pixels;
         settings.gaze_jump_reset_ratio = defaults.gaze_jump_reset_ratio;

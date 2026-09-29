@@ -45,6 +45,7 @@ std::atomic<std::uint32_t> center_mode{};
 std::atomic<std::uint32_t> simulation_pattern{};
 std::atomic<bool> show_next_jump_target{true};
 std::atomic<std::uint32_t> gaze_smoothing_ms_bits{0x41A00000U};
+std::atomic<std::uint32_t> gaze_hold_ms_bits{0x43C80000U};
 std::atomic<std::uint32_t> gaze_quantization_pixels{8U};
 std::atomic<std::uint32_t> gaze_jump_reset_ratio_bits{0x3E000000U};
 std::atomic<bool> nr_enabled{false};
@@ -184,6 +185,7 @@ Settings configured_settings() noexcept {
     settings.show_next_jump_target = show_next_jump_target.load(std::memory_order_acquire);
     settings.simulation_pattern = simulation_pattern.load(std::memory_order_acquire);
     settings.gaze_smoothing_ms = load_float(gaze_smoothing_ms_bits);
+    settings.gaze_hold_ms = load_float(gaze_hold_ms_bits);
     settings.gaze_quantization_pixels = gaze_quantization_pixels.load(
         std::memory_order_acquire
     );
@@ -304,6 +306,10 @@ void update_settings(const Settings& settings) noexcept {
     store_float(
         gaze_smoothing_ms_bits,
         std::clamp(settings.gaze_smoothing_ms, 0.0F, 100.0F)
+    );
+    store_float(
+        gaze_hold_ms_bits,
+        std::clamp(settings.gaze_hold_ms, 0.0F, 1000.0F)
     );
     gaze_quantization_pixels.store(
         std::clamp(settings.gaze_quantization_pixels, 1U, 64U),

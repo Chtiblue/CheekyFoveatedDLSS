@@ -112,8 +112,9 @@ SR foveation disabled; **Use DLSS-SR size and shape** only links region settings
 and does not shift valid gaze. If tracking is unavailable, a red message appears
 directly below the selector and the add-on falls back to fixed placement, using
 automatic alignment where available and saved manual placement otherwise.
-Temporary signal loss holds the last valid gaze for 100 ms, then returns toward
-the fixed fallback over 150 ms.
+Temporary signal loss, such as a blink, holds the last valid gaze for
+**Hold gaze on signal loss** (default 400 ms, under **Advanced eye tracking**)
+without resetting DLSS history, then returns toward the fixed fallback over 150 ms.
 
 Separate, packed and array-slice submissions can use marker calibration on D3D11 and D3D12. Quad views are not supported. See [Eye calibration](EYE-CALIBRATION.md) for path-specific limits.
 Missing, stale, or ambiguous data also causes fallback. To test motion without an
