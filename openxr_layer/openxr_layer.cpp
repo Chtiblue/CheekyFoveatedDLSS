@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
+#include <cwchar>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -302,6 +303,7 @@ struct InstanceState {
     XrPath gaze_profile{XR_NULL_PATH};
     bool gaze_binding_submitted{};
     bool host_action_sets_created{};
+    bool il2_input_compatibility{};
     XrResult binding_result{static_cast<XrResult>(CHEEKY_GAZE_RESULT_NOT_CALLED)};
 };
 
@@ -1537,8 +1539,7 @@ void ensure_menu_bindings(InstanceState& state) {
     return result;
 }
 
-// Only identified RealVR hosts get independent input calls. Cache inspected modules;
-// proxy filenames alone must never opt an ordinary OpenXR application into this.
+// Cache inspected modules; proxy filenames alone must never identify RealVR.
 bool realvr_present() noexcept {
     static std::array<HMODULE, 4> inspected{};
     static bool detected{};
@@ -1553,12 +1554,22 @@ bool realvr_present() noexcept {
     return detected;
 }
 
+bool il2_host() noexcept {
+    // IL-2's native OpenXR path can render without creating any input actions.
+    // Match only its process basename, never an application/runtime substring.
+    wchar_t path[32768]{};
+    const auto length = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+    if (!length || length >= std::size(path)) return false;
+    const auto slash = std::wcsrchr(path, L'\\');
+    return _wcsicmp(slash ? slash + 1 : path, L"IL2Series.exe") == 0;
+}
+
 // Called under state_mutex before reading gaze, once per distinct display time.
 // Once a host has synchronized input, it owns synchronization for that session:
 // an extra gaze-only sync could deactivate controllers or consume input changes.
-void poll_realvr_gaze_locked(InstanceState& instance, SessionState& state, XrTime time) {
+void poll_independent_gaze_locked(InstanceState& instance, SessionState& state, XrTime time) {
     state.input.realvr_detected = realvr_present();
-    if (!state.input.realvr_detected || !state.running ||
+    if ((!state.input.realvr_detected && !instance.il2_input_compatibility) || !state.running ||
         state.state != XR_SESSION_STATE_FOCUSED ||
         state.input.host_sync_calls || time <= 0) return;
     const bool gaze_available = state.system_supported && instance.gaze_action != XR_NULL_HANDLE &&
@@ -1587,7 +1598,7 @@ void poll_realvr_gaze_locked(InstanceState& instance, SessionState& state, XrTim
         state.input.attach_result = d.attach_action_sets(state.session, &info);
         state.action_attached = XR_SUCCEEDED(state.input.attach_result);
         if (menu_available) report_menu_diagnostic(state.action_attached ?
-            "OpenXR menu: RealVR controller actions attached" : "OpenXR menu: RealVR controller action attachment failed");
+            "OpenXR menu: compatibility controller actions attached" : "OpenXR menu: compatibility controller action attachment failed");
     }
     if (!state.action_attached || !d.sync_actions || state.last_fallback_sync_time == time) return;
     state.last_fallback_sync_time = time;
@@ -1953,6 +1964,10 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrCreateApiLayerInstance(
 
     InstanceState state{};
     state.instance = *instance;
+    state.il2_input_compatibility = il2_host();
+    if (state.il2_input_compatibility) {
+        log_startup("input_compatibility host=IL2Series.exe policy=guarded_independent_input; host actions reserve attachment, host sync disables fallback\n");
+    }
     state.extension_enabled = already_enabled || inject_extension;
     state.cylinder_enabled = cylinder_enabled || inject_cylinder;
     populate_dispatch(state.dispatch, *instance, next_gipa);
@@ -2671,7 +2686,7 @@ extern "C" XRAPI_ATTR XrResult XRAPI_CALL cheeky_xrLocateViews(
         gaze_action = instance->gaze_action;
         auto& session_state = sessions.at(session);
         if (locate_info && locate_info->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)
-            poll_realvr_gaze_locked(*instance, session_state, locate_info->displayTime);
+            poll_independent_gaze_locked(*instance, session_state, locate_info->displayTime);
         gaze_space = session_state.gaze_space;
         calibration_local_space = session_state.calibration_local_space;
         action_attached = session_state.running && session_state.action_attached &&

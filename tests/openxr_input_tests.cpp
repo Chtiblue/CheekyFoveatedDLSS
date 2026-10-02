@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,7 @@ struct Runtime {
         FN("xrDestroySession", [](XrSession) { return XR_SUCCESS; });
         FN("xrBeginSession", [](XrSession, const XrSessionBeginInfo*) { return XR_SUCCESS; });
         FN("xrEndSession", [](XrSession) { return XR_SUCCESS; });
+        FN("xrBeginFrame", [](XrSession, const XrFrameBeginInfo*) { return XR_SUCCESS; });
         FN("xrGetSystemProperties", [](XrInstance, XrSystemId, XrSystemProperties* p) {
             auto* gaze = static_cast<XrSystemEyeGazeInteractionPropertiesEXT*>(p->next);
             if (gaze) gaze->supportsEyeGazeInteraction = supported; return XR_SUCCESS;
@@ -103,8 +105,12 @@ struct Runtime {
         });
         FN("xrSyncActions", [](XrSession, const XrActionsSyncInfo* info) {
             ++syncs;
-            require(attached, "Sync occurred before attach");
+            if (!attached) return XR_ERROR_ACTIONSET_NOT_ATTACHED;
             active_sets.assign(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
+            for (const auto& active : active_sets) {
+                require(std::find(attached_sets.begin(), attached_sets.end(), active.actionSet) != attached_sets.end(),
+                    "Sync included an unattached action set");
+            }
             if (!focused) { synced = false; return XR_SESSION_NOT_FOCUSED; }
             synced = sync_result == XR_SUCCESS; return sync_result;
         });
@@ -221,10 +227,167 @@ std::string read_file(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
+
+void run_input_compatibility_fixture(const wchar_t* name, bool expected_il2, unsigned index) {
+    // Exercise process-name detection through the real DLL, without a production
+    // override. Each process owns its fixture directory, including parallel runs.
+    wchar_t executable[32768]{};
+    const auto length = GetModuleFileNameW(nullptr, executable, 32768);
+    require(length && length < 32768, "Cannot resolve input test executable");
+    const auto bin = std::filesystem::path(executable).parent_path();
+    const auto directory = bin / "test-fixtures" / "il2-input" /
+        std::to_wstring(GetCurrentProcessId()) / std::to_wstring(index);
+    std::filesystem::create_directories(directory);
+    const auto child = directory / name;
+    std::filesystem::copy_file(executable, child, std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(bin / "CheekyOpenXRLayer.dll", directory / "CheekyOpenXRLayer.dll",
+        std::filesystem::copy_options::overwrite_existing);
+    std::wstring command = L"\"" + child.wstring() + L"\" " +
+        (expected_il2 ? L"--openxr-input-il2" : L"--openxr-input-unrecognized");
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    require(CreateProcessW(child.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
+        nullptr, directory.c_str(), &startup, &process) != FALSE, "Cannot launch input compatibility fixture");
+    const auto wait = WaitForSingleObject(process.hProcess, 60000);
+    if (wait != WAIT_OBJECT_0) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
+    DWORD code = 1;
+    const bool exited = GetExitCodeProcess(process.hProcess, &code) != FALSE;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    require(wait == WAIT_OBJECT_0 && exited && code == 0, "Input compatibility fixture failed or timed out");
 }
+}
+
+int run_openxr_input_compatibility_tests(bool expected_il2) {
+    try {
+        Runtime::reset();
+        {
+            const auto log_start = read_file(cheeky::openxr_startup_log_path()).size();
+            Layer layer;
+            require(!layer.diagnostics().realvr_detected, "IL-2 compatibility must not identify RealVR");
+            const auto log = read_file(cheeky::openxr_startup_log_path()).substr(log_start);
+            require((log.find("input_compatibility host=IL2Series.exe policy=guarded_independent_input") != std::string::npos)
+                == expected_il2, "Startup log must identify only the admitted IL-2 process");
+            if (!expected_il2) {
+                require(!valid(layer.locate(1)) && !Runtime::attaches && !Runtime::syncs,
+                    "Similar executable names must not receive independent input");
+                std::cout << "PASS: unrecognized executable retains host-owned input\n";
+                return 0;
+            }
+            require(!valid(layer.locate(0)) && !Runtime::attaches && !Runtime::syncs,
+                "IL-2 fallback needs a positive display time");
+            layer.focus(false);
+            require(!valid(layer.locate(1)) && !Runtime::attaches, "IL-2 must not attach before focus");
+            layer.focus(true);
+            require(valid(layer.locate(2)), "No-input IL-2 must acquire gaze");
+            require(Runtime::bindings == 1 && Runtime::attaches == 1 && Runtime::syncs == 1,
+                "IL-2 must bind, attach and sync once on first focused locate");
+            layer.locate(2);
+            require(Runtime::syncs == 1, "IL-2 must not sync twice at the same display time");
+            XrFrameBeginInfo frame{XR_TYPE_FRAME_BEGIN_INFO};
+            require(layer.fn<PFN_xrBeginFrame>("xrBeginFrame")(layer.session, &frame) == XR_SUCCESS && Runtime::syncs == 1,
+                "BeginFrame must not inject an extra gaze-only sync");
+            layer.locate(3);
+            const auto d = layer.diagnostics();
+            require(!d.realvr_detected && d.action_attached && d.fallback_attach_calls == 1 &&
+                d.fallback_sync_calls == 2 && !d.host_attach_calls && !d.host_sync_calls,
+                "IL-2 diagnostics must report fallback input without inventing RealVR");
+            layer.focus(false);
+            require(!valid(layer.locate(4)) && Runtime::syncs == 2, "Unfocused IL-2 must invalidate gaze and stop sync");
+            layer.focus(true);
+            require(valid(layer.locate(5)) && Runtime::attaches == 1, "IL-2 must recover focus without reattaching");
+            Runtime::active = false;
+            require(!valid(layer.locate(6)), "Inactive IL-2 gaze action must remain invalid");
+            Runtime::active = true;
+            Runtime::sync_result = XR_SESSION_NOT_FOCUSED;
+            require(!valid(layer.locate(7)), "NOT_FOCUSED must invalidate IL-2 gaze");
+            Runtime::sync_result = XR_ERROR_RUNTIME_FAILURE;
+            require(!valid(layer.locate(8)), "Failed sync must invalidate IL-2 gaze");
+            Runtime::sync_result = XR_SUCCESS; Runtime::locate_result = XR_ERROR_RUNTIME_FAILURE;
+            require(!valid(layer.locate(9)), "Failed locate must reject stale IL-2 gaze flags");
+            Runtime::locate_result = XR_SUCCESS;
+            require(valid(layer.locate(10)), "IL-2 gaze must recover after transient failures");
+            require(layer.fn<PFN_xrEndSession>("xrEndSession")(layer.session) == XR_SUCCESS, "IL-2 session end failed");
+            const auto syncs = Runtime::syncs;
+            require(!valid(layer.locate(11)) && Runtime::syncs == syncs, "Stopped IL-2 session must not sync");
+            layer.begin();
+            require(valid(layer.locate(12)) && Runtime::attaches == 1, "IL-2 session restart must reuse attachment");
+            const auto host = layer.create_host_set();
+            require(layer.attach(host) == XR_ERROR_ACTIONSETS_ALREADY_ATTACHED,
+                "IL-2 late host attachment must forward the real runtime error");
+        }
+        Runtime::reset();
+        {
+            Layer layer; const auto host = layer.create_host_set();
+            require(!valid(layer.locate(1)) && !Runtime::attaches && !Runtime::syncs,
+                "IL-2 host-created sets must reserve attachment");
+            require(layer.attach(host) == XR_SUCCESS && Runtime::attached_sets.size() == 2 && Runtime::attached_sets[0] == host,
+                "IL-2 host attachment must preserve its sets and append gaze");
+            require(valid(layer.locate(2)), "IL-2 attached host may use fallback until it synchronizes");
+            layer.sync(host);
+            require(Runtime::active_sets.size() == 2 && Runtime::active_sets[0].actionSet == host &&
+                Runtime::active_sets[0].subactionPath == 55, "IL-2 host sync must preserve active sets and subaction paths");
+            const auto syncs = Runtime::syncs;
+            layer.locate(3); layer.locate(4);
+            require(Runtime::syncs == syncs && layer.diagnostics().host_sync_calls == 1,
+                "IL-2 fallback must stop permanently after host sync");
+        }
+        Runtime::reset();
+        {
+            Layer layer;
+            Runtime::attach_result = XR_ERROR_RUNTIME_FAILURE;
+            require(layer.attach(handle<XrActionSet>(99)) == XR_ERROR_RUNTIME_FAILURE, "Host attach failure must propagate");
+            Runtime::attach_result = XR_SUCCESS;
+            layer.locate(1); layer.locate(2);
+            require(Runtime::attaches == 1 && !Runtime::syncs && !layer.diagnostics().fallback_attach_calls,
+                "Even a failed host attach reserves IL-2 attachment ownership");
+        }
+        Runtime::reset();
+        {
+            Layer layer;
+            XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+            require(layer.fn<PFN_xrSyncActions>("xrSyncActions")(layer.session, &sync) == XR_ERROR_ACTIONSET_NOT_ATTACHED,
+                "Host sync error must propagate");
+            layer.locate(1); layer.locate(2);
+            require(!Runtime::attaches && Runtime::syncs == 1 && !layer.diagnostics().fallback_sync_calls,
+                "Even a failed host sync disables IL-2 fallback");
+        }
+        for (unsigned failure = 0; failure < 5; ++failure) {
+            Runtime::reset();
+            if (failure == 0) Runtime::extension = false;
+            if (failure == 1) Runtime::supported = false;
+            if (failure == 2) Runtime::binding_result = XR_ERROR_PATH_UNSUPPORTED;
+            if (failure == 3) Runtime::attach_result = XR_ERROR_RUNTIME_FAILURE;
+            if (failure == 4) Runtime::space_result = XR_ERROR_RUNTIME_FAILURE;
+            Layer layer;
+            require(!valid(layer.locate(1)) && !valid(layer.locate(2)) && !Runtime::syncs,
+                "Unsupported or failed IL-2 setup must never sync or publish gaze");
+            require(Runtime::attaches <= 1 && Runtime::bindings <= 1, "IL-2 setup failures must not retry every frame");
+        }
+        for (bool gaze : {true, false}) {
+            Runtime::reset(); Runtime::extension = gaze;
+            Layer layer(true);
+            layer.locate(1); layer.locate(2);
+            const auto count = gaze ? 2U : 1U;
+            require(Runtime::attached_sets.size() == count && Runtime::active_sets.size() == count &&
+                Runtime::attaches == 1 && Runtime::syncs == 2, "IL-2 must preserve gaze/menu action-set composition");
+        }
+        std::cout << "PASS: IL-2 process detection, guarded input lifecycle, ownership and failure diagnostics\n";
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "OpenXR IL-2 input: " << e.what() << '\n'; return 1;
+    }
+}
+
 int run_openxr_input_tests() {
     HMODULE realvr{};
     try {
+        run_input_compatibility_fixture(L"IL2Series.exe", true, 0);
+        run_input_compatibility_fixture(L"iL2sErIeS.ExE", true, 1);
+        run_input_compatibility_fixture(L"IL2Series-test.exe", false, 2);
         // Exercise the actual DLL against a lower layer unable to enumerate
         // extensions before creation, including runtimes without gaze support.
         for (unsigned failure = 0; failure <= 3; ++failure) {

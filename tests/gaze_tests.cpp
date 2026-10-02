@@ -2839,6 +2839,9 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--retained-calibration") == 0) return run_retained_calibration_tests();
     if (argc == 2 && std::strcmp(argv[1], "--debug-exposure") == 0) return run_debug_exposure_tests();
     if (argc == 2 && std::strcmp(argv[1], "--openxr-input") == 0) return run_openxr_input_tests();
+    extern int run_openxr_input_compatibility_tests(bool expected_il2);
+    if (argc == 2 && std::strcmp(argv[1], "--openxr-input-il2") == 0) return run_openxr_input_compatibility_tests(true);
+    if (argc == 2 && std::strcmp(argv[1], "--openxr-input-unrecognized") == 0) return run_openxr_input_compatibility_tests(false);
     if (argc == 2 && std::strcmp(argv[1], "--crop-calibration-dx12") == 0) return run_crop_calibration12_tests();
     if (argc == 2 && std::strcmp(argv[1], "--crop-calibration") == 0) return run_crop_calibration_tests() + run_crop_calibration12_tests();
     if (argc == 2 && std::strcmp(argv[1], "--mixed-calibration") == 0) return run_mixed_api_calibration_tests();

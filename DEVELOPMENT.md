@@ -47,6 +47,17 @@ Lua tests require `lupa==2.8`, installed in the Python environment or `build/tes
 
 GPU and host tests complement game/headset testing; they do not establish compatibility or performance in every game.
 
+`CheekyTests.exe --openxr-input` also launches isolated copies of the test host
+named `IL2Series.exe`, a mixed-case equivalent, and a nonmatching name against
+the actual OpenXR layer DLL. The IL-2 cases cover no-host-input gaze bootstrap,
+once-only attachment, per-display-time sync, focus/session recovery, setup and
+runtime failures, truthful RealVR diagnostics, and host input ownership. Existing
+ordinary-host and RealVR cases remain in the same suite. These fixtures do not
+launch IL-2 or validate a headset/runtime combination. In-game validation is
+still needed with IL-2, VDXR and Galaxy XR, including focus loss/recovery and
+VR/session restart. The startup log records IL-2 compatibility admission; input
+diagnostics record the actual fallback attach/sync calls and results.
+
 `CheekyTests --libovr-policy` checks mixed OpenVR/LibOVR gaze selection,
 invalid PVR samples and calibration ownership across OpenVR, OpenXR and LibOVR.
 `CheekyTests --libovr-transfer` checks retained calibration with both D3D11
