@@ -23,7 +23,12 @@ void log_info(const char*) noexcept {}
 void log_warning(const char*) noexcept {}
 void log_error(const char*) noexcept {}
 void trace_event(const char*, ...) noexcept {}
-void record_gaze_copy(std::uint64_t, GazeCopyEdge) noexcept {}
+unsigned observed_copy_count{};
+GazeCopyEdge observed_copy_edge{};
+void record_gaze_copy(std::uint64_t, GazeCopyEdge edge) noexcept {
+    ++observed_copy_count;
+    observed_copy_edge = edge;
+}
 void submit_gaze_copies(std::uint64_t) noexcept {}
 void reset_gaze_copies(std::uint64_t) noexcept {}
 void forget_gaze_resource(std::uint64_t) noexcept {}
@@ -213,6 +218,174 @@ struct LegacyDevice : ProbeDevice {
         if(SUCCEEDED(hr)) *out=(new LegacyList(list,s))->get(); return hr;
     }
 };
+// An opaque interposer owns the interpretation of its copy arguments. It may
+// accept a sentinel which is not a COM resource, or rewrite caller-owned copy
+// locations while forwarding. Do not submit these synthetic calls to WARP.
+struct MetadataList : LegacyList {
+    unsigned calls{}, kind{};
+    void (*on_copy)(MetadataList*){};
+    D3D12_TEXTURE_COPY_LOCATION* rewrite_location{};
+    D3D12_BOX* rewrite_box{};
+    void* copy_context{};
+    explicit MetadataList(ID3D12GraphicsCommandList* list, ProbeDevice* device) : LegacyList(list, device) {
+        methods[16] = reinterpret_cast<void*>(&copy_texture);
+        methods[17] = reinterpret_cast<void*>(&copy_resource);
+        methods[19] = reinterpret_cast<void*>(&resolve_resource);
+    }
+    static void copied(MetadataList* s) { ++s->calls; if (s->on_copy) s->on_copy(s); }
+    static void STDMETHODCALLTYPE copy_resource(MetadataList* s, ID3D12Resource*, ID3D12Resource*) { s->kind = 1; copied(s); }
+    static void STDMETHODCALLTYPE copy_texture(MetadataList* s, const D3D12_TEXTURE_COPY_LOCATION*, UINT, UINT, UINT,
+        const D3D12_TEXTURE_COPY_LOCATION*, const D3D12_BOX*) { s->kind = 2; copied(s); }
+    static void STDMETHODCALLTYPE resolve_resource(MetadataList* s, ID3D12Resource*, UINT, ID3D12Resource*, UINT, DXGI_FORMAT) { s->kind = 3; copied(s); }
+};
+struct MetadataDevice : LegacyDevice {
+    explicit MetadataDevice(ID3D12Device* d) : LegacyDevice(d) { methods[12] = reinterpret_cast<void*>(&create_list); }
+    static HRESULT STDMETHODCALLTYPE create_list(MetadataDevice* s, UINT node, D3D12_COMMAND_LIST_TYPE type,
+        ID3D12CommandAllocator* a, ID3D12PipelineState* p, REFIID id, void** out) {
+        ID3D12GraphicsCommandList* list{};
+        const auto hr = s->target->CreateCommandList(node, type, a, p, id, reinterpret_cast<void**>(&list));
+        if (SUCCEEDED(hr)) *out = (new MetadataList(list, s))->get();
+        return hr;
+    }
+};
+struct MetadataResource {
+    void** vtable;
+    std::array<void*, 15> methods{};
+    ID3D12Resource* target;
+    unsigned references{}, fault_slot{UINT_MAX};
+    explicit MetadataResource(ID3D12Resource* r) : vtable(methods.data()), target(r) {
+        methods.fill(reinterpret_cast<void*>(&ProbeDevice::unexpected));
+        methods[0] = reinterpret_cast<void*>(&query); methods[1] = reinterpret_cast<void*>(&addref);
+        methods[2] = reinterpret_cast<void*>(&release); methods[3] = reinterpret_cast<void*>(&get_private);
+        methods[5] = reinterpret_cast<void*>(&set_interface); methods[10] = reinterpret_cast<void*>(&get_desc);
+    }
+    void fault(unsigned slot) { if (fault_slot == slot) RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr); }
+    static HRESULT STDMETHODCALLTYPE query(MetadataResource* s, REFIID id, void** out) {
+        s->fault(0); *out = nullptr;
+        if (id != __uuidof(IUnknown)) return E_NOINTERFACE;
+        *out = s; addref(s); return S_OK;
+    }
+    static ULONG STDMETHODCALLTYPE addref(MetadataResource* s) { return ++s->references; }
+    static ULONG STDMETHODCALLTYPE release(MetadataResource* s) { return --s->references; }
+    static HRESULT STDMETHODCALLTYPE get_private(MetadataResource* s, REFGUID key, UINT* size, void* data) {
+        s->fault(3); return s->target->GetPrivateData(key, size, data);
+    }
+    static HRESULT STDMETHODCALLTYPE set_interface(MetadataResource* s, REFGUID key, const IUnknown* value) {
+        s->fault(5); return s->target->SetPrivateDataInterface(key, value);
+    }
+    // COM's x64 aggregate-return ABI passes the destination after this.
+    static D3D12_RESOURCE_DESC* STDMETHODCALLTYPE get_desc(MetadataResource* s, D3D12_RESOURCE_DESC* out) {
+        s->fault(10); *out = s->target->GetDesc(); return out;
+    }
+    ID3D12Resource* get() { return reinterpret_cast<ID3D12Resource*>(this); }
+};
+// Catch only in the fixture so the unfixed observer reports a test failure
+// instead of opening Windows Error Reporting. Production must handle this.
+DWORD copy_exception(void (*call)(void*), void* context) {
+    __try { call(context); return 0; }
+    __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        return GetExceptionCode();
+    }
+}
+int run_copy_metadata_tests() {
+    using namespace cheeky::foveated_dlss;
+    try {
+        Settings settings; settings.auto_stereo_alignment = true; update_settings(settings);
+        ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
+        ComPtr<IDXGIAdapter> warp; check(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)));
+        ComPtr<ID3D12Device> device; check(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
+        MetadataDevice facade(device.Get());
+        ComPtr<ID3D12CommandAllocator> allocator; check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
+        ComPtr<ID3D12GraphicsCommandList> list;
+        check(MetadataDevice::create_list(&facade, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr,
+            __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(list.GetAddressOf())));
+        require(ensure_native_observer(list.Get()), "Metadata observer initialization failed");
+        auto* proxy = reinterpret_cast<MetadataList*>(list.Get());
+        // The noncanonical source address is the value in issue #45's dump.
+        auto* invalid = reinterpret_cast<ID3D12Resource*>(0x7ffffffffffffffcULL);
+        struct Call { ID3D12GraphicsCommandList* list; ID3D12Resource* resource; } call{list.Get(), invalid};
+        const auto fault = copy_exception([](void* p) {
+            auto& c = *static_cast<Call*>(p); c.list->CopyResource(c.resource, c.resource);
+        }, &call);
+        require(!fault, "CopyResource metadata inspection raised an access violation (issue #45)");
+        require(proxy->calls == 1 && observed_copy_count == 0, "Unreadable metadata changed forwarding or recorded an edge");
+        D3D12_TEXTURE_COPY_LOCATION bad_location{}; bad_location.pResource = invalid;
+        list->CopyTextureRegion(&bad_location, 0, 0, 0, &bad_location, nullptr);
+        list->ResolveSubresource(invalid, 0, invalid, 0, DXGI_FORMAT_R8G8B8A8_UNORM);
+        require(proxy->calls == 3 && observed_copy_count == 0, "Invalid texture/resolve metadata changed forwarding");
+
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = 64; desc.Height = 32; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.SampleDesc.Count = 1;
+        ComPtr<ID3D12Resource> source, destination;
+        check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&source)));
+        check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&destination)));
+        list->CopyResource(destination.Get(), source.Get());
+        require(observed_copy_count == 1 && observed_copy_edge.source.width == 64 && observed_copy_edge.source.height == 32,
+            "A skipped copy prevented subsequent valid observation");
+        list->ResolveSubresource(destination.Get(), 0, source.Get(), 0, desc.Format);
+        require(observed_copy_count == 2, "Valid resolve observation was lost");
+        D3D12_TEXTURE_COPY_LOCATION from{}, to{}; from.pResource = source.Get(); to.pResource = destination.Get();
+        D3D12_BOX box{2, 3, 0, 12, 15, 1};
+        // The original sees the old count: recording must remain post-call.
+        proxy->on_copy = [](MetadataList*) { require(observed_copy_count == 2, "Copy edge was published before forwarding"); };
+        list->CopyTextureRegion(&to, 5, 6, 0, &from, &box);
+        proxy->on_copy = nullptr;
+        require(observed_copy_count == 3 && observed_copy_edge.source.x == 2 && observed_copy_edge.source.y == 3 &&
+            observed_copy_edge.source.width == 10 && observed_copy_edge.source.height == 12 &&
+            observed_copy_edge.destination.x == 5 && observed_copy_edge.destination.y == 6, "Texture copy bounds changed");
+        proxy->rewrite_location = &from; proxy->rewrite_box = &box;
+        proxy->on_copy = [](MetadataList* p) {
+            p->rewrite_location->pResource = reinterpret_cast<ID3D12Resource*>(0x7ffffffffffffffcULL);
+            *p->rewrite_box = {};
+        };
+        list->CopyTextureRegion(&to, 5, 6, 0, &from, &box);
+        proxy->on_copy = nullptr;
+        require(observed_copy_count == 4 && observed_copy_edge.source.width == 10 && observed_copy_edge.source.height == 12,
+            "Observer reread texture locations or bounds after forwarding");
+        // Reject unreadable location/box memory as well as unreadable resources.
+        auto* bad = reinterpret_cast<D3D12_TEXTURE_COPY_LOCATION*>(invalid);
+        list->CopyTextureRegion(&to, 0, 0, 0, bad, nullptr);
+        list->CopyTextureRegion(&to, 0, 0, 0, &to, reinterpret_cast<D3D12_BOX*>(invalid));
+        require(observed_copy_count == 4, "Unreadable texture locations produced an edge");
+        ComPtr<ID3D12Resource> probe_resource;
+        check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&probe_resource)));
+        MetadataResource metadata(probe_resource.Get());
+        for (const auto slot : {10U, 0U, 3U, 5U}) {
+            metadata.fault_slot = slot;
+            list->CopyResource(destination.Get(), metadata.get());
+            require(observed_copy_count == 4 && !metadata.references, "Failed metadata probe published an edge or leaked its COM reference");
+        }
+        metadata.fault_slot = UINT_MAX;
+        proxy->on_copy = [](MetadataList*) { require(observed_copy_count == 4, "Resource copy was published before forwarding"); };
+        list->CopyResource(destination.Get(), metadata.get());
+        proxy->on_copy = nullptr;
+        require(observed_copy_count == 5 && !metadata.references, "Valid proxy metadata did not recover or leaked a reference");
+        proxy->copy_context = &metadata;
+        proxy->on_copy = [](MetadataList* p) {
+            auto& resource = *static_cast<MetadataResource*>(p->copy_context);
+            require(resource.references != 0, "Metadata identity was not retained across forwarding");
+            resource.fault_slot = 10;
+        };
+        list->CopyResource(destination.Get(), metadata.get());
+        metadata.fault_slot = UINT_MAX;
+        list->ResolveSubresource(destination.Get(), 0, metadata.get(), 0, desc.Format);
+        proxy->on_copy = nullptr;
+        require(observed_copy_count == 7 && !metadata.references, "Copy/resolve reread descriptors after forwarding or leaked a reference");
+        const auto original_calls = proxy->calls;
+        proxy->on_copy = [](MetadataList*) { RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr); };
+        call.resource = source.Get();
+        const auto original_fault = copy_exception([](void* p) {
+            auto& c = *static_cast<Call*>(p); c.list->CopyResource(c.resource, c.resource);
+        }, &call);
+        require(original_fault == EXCEPTION_ACCESS_VIOLATION && proxy->calls == original_calls + 1 && observed_copy_count == 7,
+            "Observer swallowed an original graphics fault or published failed work");
+        check(list->Close());
+        std::cout << "PASS optional copy metadata faults, forwarding, recovery and copy/resolve bounds\n";
+        return 0;
+    } catch (const std::exception& e) { std::cerr << "FAIL copy metadata: " << e.what() << '\n'; return 1; }
+}
 int run_legacy_tests() {
     using namespace cheeky::foveated_dlss;
     try {
@@ -356,6 +529,7 @@ int run_probe_tests() {
 }
 }
 int main(int argc, char** argv) {
+    if (argc==2 && std::strcmp(argv[1],"--copy-metadata")==0) return run_copy_metadata_tests();
     if (argc==2 && std::strcmp(argv[1],"--opaque-vr")==0) return run_legacy_tests();
     if (argc==2 && std::strcmp(argv[1],"--wrapped-reshade")==0) return run_wrapped_tests(false);
     if (argc==2 && std::strcmp(argv[1],"--wrapped-streamline")==0) return run_wrapped_tests(true);

@@ -160,34 +160,58 @@ class Lifetime final : public IUnknown {
         return left;
     }
 };
-std::uint64_t track(ID3D12Object* object, bool list = false) {
+// These probes are optional metadata reads, not graphics calls. A forwarding
+// interposer can accept arguments which we cannot inspect (issue #45). Catch
+// memory faults only at the foreign call/read boundary, never around the
+// original copy, our locks, or bookkeeping. C++ exceptions still unwind normally.
+template<class Probe> bool probe_metadata(const char* operation, const void* object, Probe probe) {
+    __try {
+        probe();
+        return true;
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION || GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR
+                    ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        static std::atomic<bool> reported{};
+        if (!reported.exchange(true))
+            trace_event("D3D12 observer skipped unreadable metadata operation=%s object=%p exception=0x%08lx",
+                operation, object, GetExceptionCode());
+        return false;
+    }
+}
+using MetadataReference = ComPtr<IUnknown>;
+std::uint64_t track(ID3D12Object* object, bool list = false, MetadataReference* retained = nullptr) {
     if (!object)
         return 0;
-    ComPtr<IUnknown> identity;
-    if (FAILED(object->QueryInterface(IID_PPV_ARGS(&identity))))
+    MetadataReference identity;
+    HRESULT hr{E_FAIL};
+    if (!probe_metadata("QueryInterface", object, [&] { hr = object->QueryInterface(IID_PPV_ARGS(&identity)); }) || FAILED(hr) || !identity)
         return 0;
     const auto id =
         list ? reinterpret_cast<std::uint64_t>(object) : reinterpret_cast<std::uint64_t>(identity.Get());
-    IUnknown* existing{};
-    UINT size = sizeof(existing);
-    if (SUCCEEDED(object->GetPrivateData(observer_lifetime_key, &size, &existing)) && existing) {
-        existing->Release();
-        return id;
-    }
-    auto* sentinel = new (std::nothrow) Lifetime(id, list);
-    if (!sentinel)
+    MetadataReference existing;
+    UINT size = sizeof(IUnknown*);
+    if (!probe_metadata("GetPrivateData", object, [&] { hr = object->GetPrivateData(observer_lifetime_key, &size, existing.GetAddressOf()); }))
         return 0;
-    const auto hr = object->SetPrivateDataInterface(observer_lifetime_key, sentinel);
-    sentinel->Release();
-    return SUCCEEDED(hr) ? id : 0;
+    if (FAILED(hr) || !existing) {
+        ComPtr<Lifetime> sentinel;
+        sentinel.Attach(new (std::nothrow) Lifetime(id, list));
+        if (!sentinel || !probe_metadata("SetPrivateDataInterface", object,
+                [&] { hr = object->SetPrivateDataInterface(observer_lifetime_key, sentinel.Get()); }) || FAILED(hr))
+            return 0;
+    }
+    if (retained) *retained = std::move(identity);
+    return id;
 }
-bool region(ID3D12Resource* resource, UINT subresource, const D3D12_BOX* box, GazeCopyRegion& out) {
+bool resource_desc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc) {
+    return resource && probe_metadata("GetDesc", resource, [&] { desc = resource->GetDesc(); });
+}
+bool region(ID3D12Resource* resource, UINT subresource, const D3D12_BOX* box, GazeCopyRegion& out,
+            MetadataReference& retained) {
     if (!resource || subresource != 0)
         return false;
-    const auto d = resource->GetDesc();
-    if (d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.Width > UINT32_MAX)
+    D3D12_RESOURCE_DESC d{};
+    if (!resource_desc(resource, d) || d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.Width > UINT32_MAX)
         return false;
-    out = {track(resource), 0, 0, 0, static_cast<UINT>(d.Width), d.Height};
+    out = {track(resource, false, &retained), 0, 0, 0, static_cast<UINT>(d.Width), d.Height};
     if (!out.resource)
         return false;
     if (box) {
@@ -201,15 +225,24 @@ bool region(ID3D12Resource* resource, UINT subresource, const D3D12_BOX* box, Ga
     }
     return out.width && out.height;
 }
-void record(ID3D12GraphicsCommandList* list, const GazeCopyEdge& edge) {
-    if (edge.source.width != edge.destination.width || edge.source.height != edge.destination.height)
-        return;
-    const auto id = track(list, true);
-    if (id) {
-        record_gaze_copy(id, edge);
-        ++copies;
+struct CopyObservation {
+    GazeCopyEdge edge{};
+    std::uint64_t list_identity{}, depth_destination{};
+    ID3D12Resource* depth_source{}; // Compared by AFW, never dereferenced after forwarding.
+    MetadataReference source, destination, list, depth;
+
+    void capture_list(ID3D12GraphicsCommandList* command_list) {
+        if (edge.source.width == edge.destination.width && edge.source.height == edge.destination.height)
+            list_identity = track(command_list, true, &list);
     }
-}
+    void publish(ID3D12GraphicsCommandList* command_list) const {
+        if (depth_destination) afw_observe_depth_copy(command_list, depth_source, depth_destination);
+        if (list_identity) {
+            record_gaze_copy(list_identity, edge);
+            ++copies;
+        }
+    }
+};
 // A list with neither a calibration nor a DLSS-NR identity has nothing for the
 // execution mutex to order: its submitted/retired bookkeeping is a no-op. Such
 // lists must not wait for that mutex. The hooks patch D3D12Core itself, so they
@@ -303,58 +336,67 @@ HRESULT reset(ResetFn real_reset, ID3D12GraphicsCommandList* list, ID3D12Command
 void copy_resource(CopyFn real_copy, ID3D12GraphicsCommandList* list, ID3D12Resource* destination,
                                      ID3D12Resource* source) {
     ObservationScope scope;
+    CopyObservation observation;
+    if (scope.outer && ready) try {
+        if (afw_pending_depth_copy(list, source)) {
+            observation.depth_source = source;
+            observation.depth_destination = track(destination, false, &observation.depth);
+        }
+        if (uses_coordinated_center(current_settings()) &&
+            region(source, 0, nullptr, observation.edge.source, observation.source) &&
+            region(destination, 0, nullptr, observation.edge.destination, observation.destination))
+            observation.capture_list(list);
+    } catch (...) {}
+    // Retain the snapshotted identities until publication; otherwise a wrapper
+    // releasing its arguments could invalidate them before an edge is recorded.
     real_copy(list, destination, source);
-    if (scope.outer && ready && afw_pending_depth_copy(list, source))
-        afw_observe_depth_copy(list, source, track(destination));
-    if (!scope.outer || !ready || !uses_coordinated_center(current_settings()))
+    observation.publish(list);
+}
+void capture_texture_copy(CopyObservation& observation, ID3D12GraphicsCommandList* list,
+    const D3D12_TEXTURE_COPY_LOCATION* dst, UINT x, UINT y, UINT z,
+    const D3D12_TEXTURE_COPY_LOCATION* src, const D3D12_BOX* box) {
+    if (!dst || !src) return;
+    D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+    D3D12_BOX bounds{};
+    if (!probe_metadata("CopyTextureRegion locations", src, [&] { from = *src; to = *dst; if (box) bounds = *box; })) return;
+    if (from.Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX || to.Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX)
         return;
-    try {
-        GazeCopyEdge edge;
-        if (region(source, 0, nullptr, edge.source) && region(destination, 0, nullptr, edge.destination))
-            record(list, edge);
-    } catch (...) {
+    if (!x && !y && !z && !from.SubresourceIndex && !to.SubresourceIndex && afw_pending_depth_copy(list, from.pResource)) {
+        D3D12_RESOURCE_DESC desc{};
+        if (!box || (resource_desc(from.pResource, desc) && !bounds.left && !bounds.top && !bounds.front &&
+                bounds.right == desc.Width && bounds.bottom == desc.Height && bounds.back == 1)) {
+            observation.depth_source = from.pResource;
+            observation.depth_destination = track(to.pResource, false, &observation.depth);
+        }
     }
+    if (z || !uses_coordinated_center(current_settings()) ||
+        !region(from.pResource, from.SubresourceIndex, box ? &bounds : nullptr, observation.edge.source, observation.source) ||
+        UINT64(x) + observation.edge.source.width > UINT32_MAX || UINT64(y) + observation.edge.source.height > UINT32_MAX)
+        return;
+    const D3D12_BOX target{x, y, 0, x + observation.edge.source.width, y + observation.edge.source.height, 1};
+    if (region(to.pResource, to.SubresourceIndex, &target, observation.edge.destination, observation.destination))
+        observation.capture_list(list);
 }
 void copy_texture(CopyTextureFn real_copy_texture, ID3D12GraphicsCommandList* list, const D3D12_TEXTURE_COPY_LOCATION* dst,
                                     UINT x, UINT y, UINT z, const D3D12_TEXTURE_COPY_LOCATION* src,
                                     const D3D12_BOX* box) {
     ObservationScope scope;
+    CopyObservation observation;
+    if (scope.outer && ready) try { capture_texture_copy(observation, list, dst, x, y, z, src, box); } catch (...) {}
     real_copy_texture(list, dst, x, y, z, src, box);
-    if (scope.outer && ready && dst && src && !x && !y && !z &&
-            src->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && dst->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX &&
-            !src->SubresourceIndex && !dst->SubresourceIndex && afw_pending_depth_copy(list, src->pResource)) {
-        const auto desc = src->pResource->GetDesc();
-        if (!box || (!box->left && !box->top && !box->front && box->right == desc.Width && box->bottom == desc.Height && box->back == 1))
-            afw_observe_depth_copy(list, src->pResource, track(dst->pResource));
-    }
-    if (!scope.outer || !ready || !dst || !src || z != 0 || !uses_coordinated_center(current_settings()))
-        return;
-    if (src->Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX ||
-        dst->Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX)
-        return;
-    try {
-        GazeCopyEdge edge;
-        if (!region(src->pResource, src->SubresourceIndex, box, edge.source) ||
-            UINT64(x) + edge.source.width > UINT32_MAX || UINT64(y) + edge.source.height > UINT32_MAX)
-            return;
-        const D3D12_BOX target{x, y, 0, x + edge.source.width, y + edge.source.height, 1};
-        if (region(dst->pResource, dst->SubresourceIndex, &target, edge.destination))
-            record(list, edge);
-    } catch (...) {
-    }
+    observation.publish(list);
 }
 void resolve(ResolveFn real_resolve, ID3D12GraphicsCommandList* list, ID3D12Resource* dst, UINT dst_sub,
                                ID3D12Resource* src, UINT src_sub, DXGI_FORMAT format) {
     ObservationScope scope;
+    CopyObservation observation;
+    if (scope.outer && ready && uses_coordinated_center(current_settings())) try {
+        if (region(src, src_sub, nullptr, observation.edge.source, observation.source) &&
+            region(dst, dst_sub, nullptr, observation.edge.destination, observation.destination))
+            observation.capture_list(list);
+    } catch (...) {}
     real_resolve(list, dst, dst_sub, src, src_sub, format);
-    if (!scope.outer || !ready || !uses_coordinated_center(current_settings()))
-        return;
-    try {
-        GazeCopyEdge edge;
-        if (region(src, src_sub, nullptr, edge.source) && region(dst, dst_sub, nullptr, edge.destination))
-            record(list, edge);
-    } catch (...) {
-    }
+    observation.publish(list);
 }
 } // namespace
 std::uint64_t observe_native_resource(ID3D12Resource* resource) noexcept {

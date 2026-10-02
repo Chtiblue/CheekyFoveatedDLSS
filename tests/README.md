@@ -127,6 +127,25 @@ bounded retries, recovery after the one-second cooldown, and separate probe
 results for device wrappers with different factory methods. The default observer
 suite includes this regression plus its existing real-hook lifetime tests.
 
+`CheekyNrObserverTests.exe --copy-metadata` exercises an opaque command-list
+interposer through the real MinHook observer. Its original copy methods accept
+synthetic arguments without submitting them to WARP. The unfixed observer raises
+an access violation when given the noncanonical resource pointer from issue #45
+(`0x7ffffffffffffffc`). The regression covers CopyResource, CopyTextureRegion,
+ResolveSubresource, unreadable locations/boxes, faults in descriptor/identity/
+private-data probes, balanced COM references, recovery on the next valid copy,
+and preservation of the original texture bounds when forwarding rewrites them.
+Edges must be published after forwarding; faults from the original graphics call
+must still propagate. The normal observer suite separately executes native AFW
+depth copies and tests GPU completion, reset and wrapped queue lifetimes.
+
+The copy probes snapshot metadata before forwarding and retain identities until
+publication. Only optional metadata access violations/in-page errors are skipped;
+submission/reset tracking remains enabled. This is a regression for the observed
+Cheeky crash path, not a reproduction of the complete Control Resonant/Mutar
+configuration. The dump does not establish why its resource pointer was invalid,
+and that game/mod combination still requires an in-game retest.
+
 Before the fixes, the regression runs reported:
 
 - SR dispatch used color/output in incompatible states.
