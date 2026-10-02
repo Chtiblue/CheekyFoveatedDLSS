@@ -774,6 +774,8 @@ void load_settings_from_reshade() noexcept {
         nullptr, config_section, "CenterPreset",
         settings.center_preset
     ));
+    settings.fix_motion_blur = false;
+    static_cast<void>(reshade::get_config_value(nullptr, config_section, "FixMotionBlur", settings.fix_motion_blur));
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "CenterSupersampling", settings.center_supersampling
     ));
@@ -960,6 +962,7 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
         nullptr, config_section, "CenterPreset",
         settings.center_preset
     );
+    reshade::set_config_value(nullptr, config_section, "FixMotionBlur", settings.fix_motion_blur);
     reshade::set_config_value(
         nullptr, config_section, "CenterSupersampling", settings.center_supersampling
     );
@@ -1125,12 +1128,13 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         std::uint32_t& value,
         const bool allow_game_default
     ) {
-        const std::uint32_t values[]{0U, rr ? 4U : 5U, rr ? 5U : 11U, rr ? 6U : 12U, 13U};
+        const std::uint32_t values[]{0U, rr ? 4U : 5U, rr ? 5U : 10U, rr ? 6U : 11U, 12U, 13U};
         const char* labels[]{
             "Game/default",
             rr ? "D" : "E (Fastest)",
-            rr ? "E" : "K",
-            rr ? "F" : "L",
+            rr ? "E" : "J",
+            rr ? "F" : "K",
+            "L",
             "M",
         };
         const int first = (rr || allow_game_default) ? 0 : 1;
@@ -1151,6 +1155,13 @@ void draw_sr_controls(Settings& settings, bool& changed) {
     ImGui::SameLine();
     ImGui::TextDisabled("(Alt+Shift+/)");
     preset_combo(rr ? "Center RR preset" : "Center preset", rr ? settings.rr_center_preset : settings.center_preset, true);
+    if (!rr) {
+        changed |= ImGui::Checkbox("Fix motion-vector blur", &settings.fix_motion_blur);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+            "DX12 DLSS-SR with input-resolution motion vectors.\n"
+            "Copies the center motion region to zero offset on the GPU. Adds GPU work.");
+        ImGui::TextDisabled("(Use if preset causes blurriness)");
+    }
     static float supersampling_draft = 1.0F;
     static bool editing_supersampling{};
     if (!editing_supersampling) supersampling_draft = settings.center_supersampling;
@@ -1400,6 +1411,7 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         settings.rr_center_preset = defaults.rr_center_preset;
         settings.rr_peripheral_preset = defaults.rr_peripheral_preset;
         settings.center_preset = defaults.center_preset;
+        settings.fix_motion_blur = defaults.fix_motion_blur;
         settings.center_supersampling = defaults.center_supersampling;
         supersampling_draft = defaults.center_supersampling;
         editing_supersampling = false;

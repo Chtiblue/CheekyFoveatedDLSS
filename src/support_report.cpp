@@ -96,6 +96,7 @@ std::string settings_text(const Settings& s) {
     out << "peripheral_dlaa_enabled=" << s.peripheral_dlaa_enabled << '\n';
     out << "peripheral_dlaa_scale=" << s.peripheral_dlaa_scale << '\n';
     out << "center_preset=" << s.center_preset << '\n';
+    out << "fix_motion_blur=" << s.fix_motion_blur << '\n';
     out << "peripheral_dlaa_preset=" << s.peripheral_dlaa_preset << '\n';
     out << "width=" << s.width << '\n';
     out << "height=" << s.height << '\n';

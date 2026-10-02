@@ -1540,6 +1540,48 @@ void verify_late_attach_test(CheekyUEVRSnapshotFn get, void (*command)(const cha
         }
         puts("Inactive AFW: mode switches, stale-mode fallback and SR/NR history recovery passed");
     }
+    if (!f.context && (!f.use_sl || lower_hook)) {
+        static bool expect_copy{}, contract_ok{};
+        static unsigned expected_preset{}, observed{}, resets{};
+        proc<void(*)(void(*)(const NgxParameters*))>(f.ngx,"CheekyFakeObserve")(+[](const NgxParameters* p) {
+            ++observed; resets += get_ui(p,"Reset") != 0;
+            auto& f=fixture();
+            for (unsigned i=0; i<3; ++i) {
+                const char* names[]{"Color","Depth","MotionVectors"};
+                const char* bases[]{"Color","Depth","MV"};
+                ID3D12Resource* resource{}; p->Get(names[i],&resource);
+                if (!resource) { contract_ok=false; continue; }
+                const auto x=get_ui(p,(std::string("DLSS.Input.")+bases[i]+".Subrect.Base.X").c_str());
+                const auto y=get_ui(p,(std::string("DLSS.Input.")+bases[i]+".Subrect.Base.Y").c_str());
+                if (i==2 && expect_copy) {
+                    const auto desc=resource->GetDesc();
+                    contract_ok &= resource!=f.textures12[i].Get() &&
+                        desc.Width==get_ui(p,"Width") && desc.Height==get_ui(p,"Height") && x==0 && y==0;
+                } else contract_ok &= resource==f.textures12[i].Get() && x>0 && y>0;
+            }
+            contract_ok &= get_ui(p,"Width")==64 && get_ui(p,"OutWidth")==128;
+            for (const auto* hint:{"DLAA","Quality","Balanced","Performance","UltraPerformance","UltraQuality"})
+                contract_ok &= get_ui(p,(std::string("DLSS.Hint.Render.Preset.")+hint).c_str())==expected_preset;
+        });
+        f.params.Set("Reset",0U);
+        for (const auto* hint:{"DLAA","Quality","Balanced","Performance","UltraPerformance","UltraQuality"})
+            f.params.Set((std::string("DLSS.Hint.Render.Preset.")+hint).c_str(),0U);
+        for (unsigned preset:{11U,10U,13U}) for (bool enabled:{false,true,false,true}) {
+            expected_preset=preset; expect_copy=enabled; observed=0; resets=0; contract_ok=true;
+            command((std::string("1\n260\nset\nEnabled=true\nPeripheralDlaa=false\nNrEnabled=false\nAutoStereoAlignment=false\nCenterMode=0\nWidth=0.5\nHeight=0.5\nXOffset=0\nHeightOffset=0\nCenterPreset=")+
+                std::to_string(preset)+"\nFixMotionBlur="+(enabled?"true":"false")).c_str());
+            for (unsigned frame=0;frame<4;++frame) {
+                const auto original=f.params.values;
+                require(ngx_succeeded(f.evaluate()),"Motion blur fix evaluation"); f.finish_gpu();
+                require(f.params.values==original,"Motion blur fix restores all game parameters");
+            }
+            require(observed==4 && contract_ok,"Only enabled motion copy is packed; K/J/M hints reach NGX");
+            require(resets==1,"Preset or compatibility toggle resets history exactly once");
+        }
+        proc<void(*)(void(*)(const NgxParameters*))>(f.ngx,"CheekyFakeObserve")(nullptr);
+        command("1\n261\nset\nCenterPreset=0\nFixMotionBlur=false");
+        puts("Motion blur fix: opt-in MV-only copies, K/J/M presets, toggle resets and parameter restoration passed");
+    }
     require(ngx_succeeded(f.release(f.handle)),"Release recreated feature");
     if (f.use_sl && !f.context && !lower_hook) {
         f.complete_sl_metadata = true; f.options.struct_version = 3;

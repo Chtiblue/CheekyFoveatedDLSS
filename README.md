@@ -80,7 +80,7 @@ Start with defaults, then compare native and foveated DLSS timings in the perfor
 ## Troubleshooting
 1. Use latest DLSS files using DLSS Swapper
 2. Make sure no overrides are set in NVidia Profile Inspector, NVidia App, or DLSS Swapper
-3. I found games don't like some presets (Example Mortal Shell 2 causes smearing if center region is set to Preset K). Try other Presets.
+3. Some games smear with certain center presets (for example, Preset K in Mortal Shell 2). Try another preset, including J, or enable **Fix motion-vector blur** beneath the center preset selector. This opt-in workaround copies only the center motion vectors to a zero-offset GPU texture; it fixed Preset K blur in AC Rally testing. It currently applies to DX12 NGX DLSS-SR with input-resolution motion vectors, including UEVR's lower hook. It adds GPU work, so leave it off in games that already look clear.
 4. UEVR AFW supports DX12 SR and NR with fixed or gaze-driven coverage using the public AFW UEVR build. Start with Automatic under Stereo and gaze; performance figures and reporting are under Performance and Support. See the [AFW setup and compatibility notes](uevr/README.md#afw).
 5. Eye Tracking: You can use https://github.com/maluoi/openxr-explorer to verify eye tracking works
 

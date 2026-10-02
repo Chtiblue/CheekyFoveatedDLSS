@@ -83,6 +83,10 @@ void wait_gpu(ID3D12Device* device, ID3D12CommandQueue* queue) {
 }
 void settings_tests(const std::filesystem::path& root) {
     Settings s; require(s.d3d12_lower_hook, "Lower hook is the default");
+    require(!s.fix_motion_blur, "Motion blur compatibility is opt-in");
+    require(set_named_setting(s, "FixMotionBlur", "true") && s.fix_motion_blur, "Enable motion blur fix");
+    require(!set_named_setting(s, "FixMotionBlur", "invalid"), "Reject malformed motion blur setting");
+    s.center_preset = s.peripheral_dlaa_preset = 10U;
     require(set_named_setting(s, "D3D12LowerHook", "false") && !s.d3d12_lower_hook, "Select higher hook");
     require(!set_named_setting(s, "D3D12LowerHook", "invalid"), "Reject invalid hook toggle");
     require(set_named_setting(s, "Width", "0.2"), "Parse setting");
@@ -105,6 +109,14 @@ void settings_tests(const std::filesystem::path& root) {
     std::string error; const auto path = root / "roundtrip.ini";
     require(write_settings_file(path, s, error), "Write settings");
     Settings r; require(read_settings_file(path, r, error), "Read settings");
+    require(r.fix_motion_blur && r.center_preset == 10U && r.peripheral_dlaa_preset == 10U,
+        "Preset J and motion blur fix survive settings roundtrip");
+    update_settings(r);
+    require(current_settings().fix_motion_blur && current_settings().center_preset == 10U &&
+        current_settings().peripheral_dlaa_preset == 10U, "Runtime accepts J and motion blur fix");
+    auto reset_sr = r;
+    require(reset_settings_group(reset_sr, "sr") && !reset_sr.fix_motion_blur,
+        "SR reset disables compatibility copies");
     require(serialize_settings(r) == serialize_settings(s), "Roundtrip all persisted fields");
     require(r.eye_calibration_method == EyeCalibrationMethod::full && r.eye_calibration_learned_method == 2 &&
         r.eye_calibration_learned_signature == 0xfedcba9876543210ULL && r.eye_calibration_learned_sessions == 2,
@@ -132,6 +144,7 @@ void settings_tests(const std::filesystem::path& root) {
         r.nr_working_scale == 0.37f, "Missing NR order must default to After");
     require(r.nr_style == 0U, "Legacy settings must restore Standard style");
     require(r.d3d12_lower_hook, "Legacy settings default to lower hook even over a higher-hook draft");
+    require(!r.fix_motion_blur, "Legacy settings cannot inherit compatibility copies");
     require(serialize_settings(r).find("AfwDepthCoverage") == std::string::npos,
         "Retired depth setting is ignored when loading older files and omitted on save");
     require(!r.afw_manual_coverage && !r.afw_automatic_coverage && r.afw_warp_margin == .05F,

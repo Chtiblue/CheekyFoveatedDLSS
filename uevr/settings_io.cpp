@@ -98,6 +98,7 @@ bool read_settings_file(const std::filesystem::path& path, Settings& s, std::str
     if (!in) { error = "Cannot read settings file"; return false; }
     auto candidate = s;
     candidate.d3d12_lower_hook = true; // Older files use the new lower-hook default.
+    candidate.fix_motion_blur = false; // Compatibility copies are always opt-in.
     // Older files predate this additive key and use After, even when loaded
     // over a currently configured Before setting. Commit only after validation.
     candidate.nr_processing_order = NrProcessingOrder::after_upscaling;

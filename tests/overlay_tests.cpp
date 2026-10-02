@@ -240,10 +240,13 @@ void test_ui_diagnostics() {
     render("DLSS-SR"); text = render("DLSS-SR");
     require(text.find("Center RR preset") != text.npos && text.find("Peripheral RR preset") != text.npos,
         "Standalone preset menus did not switch to RR");
+    require(text.find("Fix motion-vector blur") == text.npos, "RR exposed SR-only compatibility copies");
     state.snapshot = R"({"apis":[{}, {"reconstruction_feature":1}]})";
     render("DLSS-SR"); text = render("DLSS-SR");
     require(text.find("Center RR preset") == text.npos && text.find("Center preset") != text.npos,
         "Standalone preset menus did not return to SR");
+    require(text.find("Fix motion-vector blur") != text.npos &&
+        text.find("(Use if preset causes blurriness)") != text.npos, "Motion blur checkbox or usage note missing");
     state.draft.enabled = false;
     state.draft.nr_enabled = false;
     state.snapshot = R"({"gaze":{"layer":false,"views":2,"alignment":0}})";

@@ -306,7 +306,7 @@ ID3D12Resource* prepare_crop_texture12(ID3D12GraphicsCommandList* list, ID3D12Re
         static std::atomic<unsigned> failures{};
         const auto sequence = failures.fetch_add(1, std::memory_order_relaxed);
         if (sequence < 16 || sequence % 300 == 0)
-            trace_event("RR crop copy failed reason=%s source=%p format=%u flags=0x%X "
+            trace_event("DLSS crop copy failed reason=%s source=%p format=%u flags=0x%X "
                 "texture=%llux%u array=%u mips=%u samples=%u crop=%ux%u@%u,%u "
                 "hresult=0x%08X pending=%zu unsubmitted=%zu",
                 reason, source, source_desc.Format, source_desc.Flags,

@@ -40,6 +40,7 @@ struct CanonicalFeatureKey {
     std::uint32_t create_flags{};
     std::array<std::uint32_t, 6U> presets{};
     std::array<std::uint32_t, 3U> rr_modes{};
+    bool fix_motion_blur{};
 };
 
 struct CanonicalViewState {
@@ -105,7 +106,8 @@ std::array<
         left.output_height == right.output_height &&
         left.perf_quality == right.perf_quality &&
         left.create_flags == right.create_flags &&
-        left.presets == right.presets && left.rr_modes == right.rr_modes;
+        left.presets == right.presets && left.rr_modes == right.rr_modes &&
+        left.fix_motion_blur == right.fix_motion_blur;
 }
 
 [[nodiscard]] CanonicalViewState* find_view(const DlssViewId view_id) noexcept {
@@ -1681,7 +1683,10 @@ NgxResult evaluate_d3d12_backend(
             view->view_id = contract.view_id;
         }
 
-        const auto key = make_key(contract, crop, parameters);
+        const bool pack_motion = inputs.fix_motion_blur &&
+            contract.feature_id == 1U && contract.motion_vectors_low_res;
+        auto key = make_key(contract, crop, parameters);
+        key.fix_motion_blur = pack_motion;
         const bool key_changed = !view->has_key || !same_key(view->key, key);
         const bool crop_changed = !view->has_crop ||
             std::memcmp(&view->last_crop, &crop, sizeof(crop)) != 0;
@@ -1690,6 +1695,53 @@ NgxResult evaluate_d3d12_backend(
             static_cast<void>(view->release_feature(view->private_handle));
             view->private_handle = nullptr;
         }
+
+        bool motion_reset = !view->has_crop;
+        const auto& source_crop = display_crop ? *display_crop : crop;
+        const bool resize_motion = !contract.motion_vectors_low_res &&
+            (source_crop.output_width != crop.output_width || source_crop.output_height != crop.output_height);
+        CropMotionOffset offset{};
+        bool correct_motion{};
+        bool motion_corrected{};
+        bool motion_ready = true;
+        if (!contract.reset && !key_changed && view->has_crop && crop_changed &&
+            contract.preserve_history_on_crop_move) {
+            correct_motion = crop_motion_offset(view->last_crop, crop, contract.motion_vectors_low_res,
+                contract.motion_vector_scale_x, contract.motion_vector_scale_y, offset);
+            if (!correct_motion) { motion_reset = true; offset = {}; }
+        }
+        const auto begin_timing = [&] {
+            if (timing && timing->query_heap && timing->write_begin_timestamp)
+                command_list->EndQuery(timing->query_heap, D3D12_QUERY_TYPE_TIMESTAMP, timing->begin_query_index);
+        };
+        const auto prepare_motion = [&] {
+            ID3D12Resource* prepared{};
+            if (resize_motion || correct_motion) {
+                prepared = prepare_crop_motion12(command_list, inputs.motion_vectors,
+                    inputs.mv_base_x, inputs.mv_base_y,
+                    contract.motion_vectors_low_res ? crop.input_width : source_crop.output_width,
+                    contract.motion_vectors_low_res ? crop.input_height : source_crop.output_height, offset,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    contract.motion_vectors_low_res ? crop.input_width : crop.output_width,
+                    contract.motion_vectors_low_res ? crop.input_height : crop.output_height);
+                motion_corrected = prepared != nullptr;
+            } else if (pack_motion) {
+                prepared = prepare_crop_texture12(command_list, inputs.motion_vectors,
+                    inputs.mv_base_x, inputs.mv_base_y, crop.input_width, crop.input_height);
+            } else return;
+            if (prepared) {
+                parameters->Set("MotionVectors", prepared);
+                parameters->Set("DLSS.Input.MV.Subrect.Base.X", 0U);
+                parameters->Set("DLSS.Input.MV.Subrect.Base.Y", 0U);
+            } else {
+                motion_reset = true;
+                motion_ready = !resize_motion && !pack_motion;
+            }
+        };
+        // Supply packed vectors at creation as well as evaluation. A moving
+        // crop's existing correction pass already produces zero-origin vectors,
+        // so the compatibility option never needs a second copy/dispatch.
+        if (pack_motion) { begin_timing(); prepare_motion(); }
 
         if (view->private_handle == nullptr) {
             NgxHandle* created{};
@@ -1701,7 +1753,7 @@ NgxResult evaluate_d3d12_backend(
             );
             trace_event(
                 "D3D12 canonical create view=%llu feature=%u "
-                "input=%ux%u output=%ux%u flags=0x%08X quality=%u "
+                "input=%ux%u output=%ux%u flags=0x%08X quality=%u motionBlurFix=%u "
                 "result=0x%08X handle=%p",
                 static_cast<unsigned long long>(contract.view_id),
                 contract.feature_id,
@@ -1711,6 +1763,7 @@ NgxResult evaluate_d3d12_backend(
                 crop.output_height,
                 contract.create_flags,
                 contract.perf_quality,
+                pack_motion,
                 result,
                 created
             );
@@ -1725,46 +1778,7 @@ NgxResult evaluate_d3d12_backend(
         }
 
         if (view->private_handle != nullptr) {
-            if (timing != nullptr && timing->query_heap != nullptr &&
-                timing->write_begin_timestamp) {
-                command_list->EndQuery(
-                    timing->query_heap,
-                    D3D12_QUERY_TYPE_TIMESTAMP,
-                    timing->begin_query_index
-                );
-            }
-            bool motion_reset = !view->has_crop;
-            const auto& source_crop = display_crop ? *display_crop : crop;
-            const bool resize_motion = !contract.motion_vectors_low_res &&
-                (source_crop.output_width != crop.output_width || source_crop.output_height != crop.output_height);
-            CropMotionOffset offset{};
-            bool correct_motion{};
-            bool motion_corrected{};
-            bool motion_ready = true;
-            if (!contract.reset && !key_changed && view->has_crop && crop_changed &&
-                contract.preserve_history_on_crop_move) {
-                correct_motion = crop_motion_offset(view->last_crop, crop, contract.motion_vectors_low_res,
-                    contract.motion_vector_scale_x, contract.motion_vector_scale_y, offset);
-                if (!correct_motion) { motion_reset = true; offset = {}; }
-            }
-            if (resize_motion || correct_motion) {
-                auto* corrected = prepare_crop_motion12(command_list, inputs.motion_vectors,
-                    inputs.mv_base_x, inputs.mv_base_y,
-                    contract.motion_vectors_low_res ? crop.input_width : source_crop.output_width,
-                    contract.motion_vectors_low_res ? crop.input_height : source_crop.output_height, offset,
-                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    contract.motion_vectors_low_res ? crop.input_width : crop.output_width,
-                    contract.motion_vectors_low_res ? crop.input_height : crop.output_height);
-                if (corrected) {
-                    motion_corrected = true;
-                    parameters->Set("MotionVectors", corrected);
-                    parameters->Set("DLSS.Input.MV.Subrect.Base.X", 0U);
-                    parameters->Set("DLSS.Input.MV.Subrect.Base.Y", 0U);
-                } else {
-                    motion_reset = true;
-                    motion_ready = !resize_motion;
-                }
-            }
+            if (!pack_motion) { begin_timing(); prepare_motion(); }
             if (contract.reset || key_changed || motion_reset ||
                 (crop_changed && !contract.preserve_history_on_crop_move)) {
                 parameters->Set("Reset", 1);

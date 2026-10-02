@@ -43,6 +43,7 @@ struct DlssFrameContract {
 };
 
 struct D3D12DlssInputs {
+    bool fix_motion_blur{}; // Center-only opt-in; never inferred for peripheral/RR calls.
     ID3D12Resource* color{};
     ID3D12Resource* depth{};
     ID3D12Resource* motion_vectors{};

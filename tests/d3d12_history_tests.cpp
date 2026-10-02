@@ -26,7 +26,10 @@ unsigned creates{}, resets{};
 int observed_reset{};
 bool evaluate_succeeds{true};
 ID3D12Resource* observed_motion{};
-NgxResult create(ID3D12GraphicsCommandList*, unsigned, NgxParameters*, NgxHandle** handle) {
+ID3D12Resource* created_motion{};
+unsigned observed_motion_x{}, observed_motion_y{};
+NgxResult create(ID3D12GraphicsCommandList*, unsigned, NgxParameters* parameters, NgxHandle** handle) {
+    parameters->Get("MotionVectors", &created_motion);
     *handle = reinterpret_cast<NgxHandle*>(static_cast<uintptr_t>(++creates));
     return 1;
 }
@@ -34,6 +37,8 @@ NgxResult evaluate(ID3D12GraphicsCommandList*, const NgxHandle*, const NgxParame
     observed_reset = 0;
     parameters->Get("Reset", &observed_reset);
     parameters->Get("MotionVectors", &observed_motion);
+    observed_motion_x = get_ui(parameters, "DLSS.Input.MV.Subrect.Base.X");
+    observed_motion_y = get_ui(parameters, "DLSS.Input.MV.Subrect.Base.Y");
     resets += observed_reset != 0;
     return evaluate_succeeds ? 1U : 0xBAD00005U;
 }
@@ -69,7 +74,8 @@ void read_pixel(ID3D12GraphicsCommandList* list, ID3D12Resource* source,
     transition(list, source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 }
 
-void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, float mv_scale = -128.F) {
+void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, float mv_scale = -128.F,
+    bool fix_motion_blur = false) {
     reset_gaze_foveation(); allow_afw_stereo_projection(true);
     creates = resets = 0;
     ComPtr<IDXGIFactory4> factory; check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)));
@@ -117,7 +123,7 @@ void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, f
     to.pResource = resources[2].Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
     transition(list.Get(), resources[2].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    auto readback = buffer(device.Get(), 1536, D3D12_HEAP_TYPE_READBACK);
+    auto readback = buffer(device.Get(), 2048, D3D12_HEAP_TYPE_READBACK);
     CropGeometry previous{}; CropMotionOffset expected_offset{};
     parameters.Set("Width", 128U); parameters.Set("Height", 128U);
     parameters.Set("OutWidth", 256U); parameters.Set("OutHeight", 256U);
@@ -169,6 +175,7 @@ void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, f
         contract.motion_vector_scale_x = contract.motion_vector_scale_y = mv_scale;
         contract.reset = game_reset || d3d12_evaluation_gaze_reset(prepared);
         D3D12DlssInputs inputs{};
+        inputs.fix_motion_blur = fix_motion_blur;
         inputs.color = resources[0].Get(); inputs.depth = resources[1].Get();
         inputs.motion_vectors = resources[2].Get(); inputs.output = d3d12_private_output(prepared);
         inputs.color_base_x = inputs.depth_base_x = crop.input_base_x;
@@ -178,6 +185,18 @@ void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, f
         const auto result = evaluate_d3d12_backend(list.Get(), contract, inputs, &parameters,
             d3d12_reconstruction_crop(prepared), {create, evaluate, release}, nullptr, &crop);
         require(ngx_succeeded(result) == evaluate_succeeds, "Private SR result was not preserved");
+        if (frame == 0 && fix_motion_blur) {
+            const bool packed = low_res_motion && feature == 1U;
+            require((observed_motion != resources[2].Get()) == packed &&
+                created_motion == observed_motion, "Compatibility copy scope or creation binding is incorrect");
+            if (packed) {
+                require(observed_motion_x == 0 && observed_motion_y == 0 &&
+                    observed_motion->GetDesc().Width == crop.input_width &&
+                    observed_motion->GetDesc().Height == crop.input_height,
+                    "Compatibility motion region is not crop-sized at origin zero");
+                read_pixel(list.Get(), observed_motion, readback.Get(), 1536);
+            }
+        }
         if (frame >= 2 && frame < 10 && observed_reset) stable = false;
         const bool expected_reset = frame == 0 || frame == 10 || frame == 12 || frame == 14 || frame == 15 ||
             frame == 18 || frame == 21 || frame == 23;
@@ -220,6 +239,11 @@ void run_alternating(bool low_res_motion, float margin, unsigned feature = 1U, f
     const auto* actual = reinterpret_cast<const float*>(data);
     const auto* original = reinterpret_cast<const float*>(data + 512);
     const auto* copied = reinterpret_cast<const float*>(data + 1024);
+    if (fix_motion_blur && low_res_motion && feature == 1U) {
+        const auto* packed = reinterpret_cast<const float*>(data + 1536);
+        require(packed[0] == .125F && packed[1] == -.25F,
+            "Stationary compatibility copy changed motion values");
+    }
     const bool copy_correct = copied[0]==1.25F && copied[1]==-2.5F;
     const bool vectors_correct = std::abs(actual[0] - (.125F + expected_offset.x)) < 1e-6F &&
         std::abs(actual[1] - (-.25F + expected_offset.y)) < 1e-6F && original[0] == .125F && original[1] == -.25F;
@@ -244,6 +268,11 @@ int run_d3d12_history_tests() {
         // RR's supported low-resolution vectors include pixel-space vectors
         // (the Hogwarts capture uses scale 1) and normalized signed vectors.
         for (float scale : {1.F, -128.F}) run_alternating(true, 0.F, 13U, scale);
+        // Exercise the production compatibility path with moving crops and
+        // verify that RR and output-resolution vectors ignore the SR option.
+        run_alternating(true, 0.F, 1U, 1.F, true);
+        run_alternating(false, 0.F, 1U, 1.F, true);
+        run_alternating(true, 0.F, 13U, 1.F, true);
         return 0;
     }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

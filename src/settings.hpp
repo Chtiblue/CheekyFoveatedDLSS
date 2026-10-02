@@ -45,6 +45,7 @@ struct Settings {
     bool peripheral_dlaa_enabled{true};
     float peripheral_dlaa_scale{0.75F};
     std::uint32_t center_preset{};
+    bool fix_motion_blur{false}; // Opt-in DX12 SR center motion-vector copy.
     std::uint32_t rr_center_preset{};
     std::uint32_t rr_peripheral_preset{};
     float center_supersampling{1.0F};

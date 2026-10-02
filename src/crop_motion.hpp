@@ -41,7 +41,7 @@ void release_crop_motion11() noexcept;
 
 // Exact-format crop copy (shader extraction to R32_FLOAT for depth/stencil),
 // retained by the same submission/fence tracking as motion passes. Used to give
-// RR consistently crop-sized, zero-origin inputs. Source must be in
+// RR crop-sized inputs and SR's opt-in zero-origin motion vectors. Source must be in
 // NON_PIXEL_SHADER_RESOURCE.
 ID3D12Resource* prepare_crop_texture12(ID3D12GraphicsCommandList*, ID3D12Resource*,
     unsigned x, unsigned y, unsigned width, unsigned height) noexcept;

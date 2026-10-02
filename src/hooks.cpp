@@ -4921,6 +4921,7 @@ void evaluate_nr_after_native_d3d12(
     }
 
     D3D12DlssInputs inputs{};
+    inputs.fix_motion_blur = !rr && effective_settings.fix_motion_blur;
     inputs.color = get_d3d12_parameter_resource(parameters, "Color");
     inputs.depth = get_d3d12_parameter_resource(parameters, "Depth");
     inputs.motion_vectors = get_d3d12_parameter_resource(parameters, "MotionVectors");

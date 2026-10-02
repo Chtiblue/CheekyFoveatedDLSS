@@ -171,6 +171,20 @@ def run(engine):
     receive(state)
     draw()
     assert g["values"]["Center preset"] is not None and g["values"]["Center RR preset"] is None
+    assert g.combos["Center preset"][10] == "J"
+    assert g["values"]["Fix motion-vector blur"] is False
+    draw(changes={"Fix motion-vector blur": True})
+    assert "FixMotionBlur=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["FixMotionBlur"] = True
+    receive(state)
+    draw()
+    assert g["values"]["Fix motion-vector blur"] is True
+    receive(rr)
+    draw()
+    assert g["values"]["Fix motion-vector blur"] is None, "RR exposed the SR motion workaround"
+    state["settings"]["FixMotionBlur"] = False
+    receive(state)
     afw = copy.deepcopy(state)
     afw["renderer"] = 1  # AFW supports DX12; the newest ordinary host report may be DX11.
     afw["afw_experiment"] = {"enabled": True, "core_calls": 100, "lower_calls": 0,
