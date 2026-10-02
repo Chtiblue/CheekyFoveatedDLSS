@@ -194,6 +194,25 @@ void startup_test() {
     }
 }
 void menu_policy_test() {
+    cheeky::standalone::MenuPointerQueue queue;
+    queue.push({10, 20, true, true});
+    queue.push({30, 40, true, true});
+    queue.push({50, 60, true, true});
+    queue.push({70, 80, false, true});
+    queue.push({90, 100, false, true});
+    queue.push({110, 120, false, true});
+    check(queue.count == 4, "Only motion may coalesce between pointer edges");
+    auto event = queue.pop();
+    check(event.down && event.x == 10, "Queued press moved from its original target");
+    event = queue.pop();
+    check(event.down && event.x == 50, "Drag motion did not coalesce");
+    event = queue.pop();
+    check(!event.down && event.x == 70, "Queued release moved from its original target");
+    event = queue.pop();
+    check(!event.down && event.x == 110, "Hover motion did not coalesce");
+    queue.push({10, 20, true, true});
+    queue.push({30, 40, true, true});
+    check(queue.pop().x == 10, "Press after draining the queue lost its original position");
     using cheeky::standalone::controller_pointer_owns;
     check(!controller_pointer_owns(true, false, false, 10000, 9999), "hover stole desktop mouse");
     check(controller_pointer_owns(true, false, true, 10000, 9999), "controller click cannot take ownership");

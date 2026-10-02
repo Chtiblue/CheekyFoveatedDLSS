@@ -1,3 +1,19 @@
+# OpenXR menu and shared-gaze regressions
+
+The normal MSBuild script and top-level CTest suite include the OpenXR binding
+fixture, Cyberpunk shared-gaze checks, calibration startup opt-out and DX11
+shared-menu texture checks. The binding fixture can also be built independently
+from `tests/openxr_binding`.
+
+Overlay tests load the matching OpenXR layer beside the test executable; both
+build systems declare that dependency. No separately named build directory is
+required. DX11/DX12 overlay checks reproduce a controller press and release on
+a checkbox followed by pointer motion before Present. The click must still
+toggle the checkbox. Queue tests also preserve press/drag/release positions while
+coalescing ordinary motion. These checks failed against PR #48's original path
+and queue behavior and pass with the follow-up fixes. They use fixtures and WARP,
+not live headset or NVIDIA DLSS evaluation.
+
 # OpenXR extension discovery
 
 `CheekyTests.exe --openxr-input` loads the production layer DLL against a mock

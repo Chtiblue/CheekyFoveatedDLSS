@@ -135,6 +135,7 @@ add_custom_command(
 )
 
 enable_testing()
+add_subdirectory(tests/openxr_binding)
 add_executable(
     CheekyTests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/gaze_tests.cpp"
@@ -206,6 +207,7 @@ if(MSVC)
     target_compile_options(CheekyTests PRIVATE /W4 /permissive- /utf-8)
 endif()
 add_test(NAME CheekyGazeTests COMMAND CheekyTests)
+add_test(NAME CheekyCyberpunkSharedGaze COMMAND CheekyTests --cyberpunk-shared-gaze)
 add_test(NAME CheekyHookPath COMMAND CheekyTests --hook-path)
 add_test(NAME CheekyOpenXRInputTests COMMAND CheekyTests --openxr-input)
 add_test(NAME CheekyStereoSupportTests COMMAND CheekyTests --stereo-support)

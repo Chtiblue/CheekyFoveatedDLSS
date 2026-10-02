@@ -8,9 +8,17 @@ struct MenuPointer { float x{}, y{}; bool down{}, active{}; };
 struct MenuPointerQueue {
     std::array<MenuPointer, 64> events{};
     unsigned count{};
+    MenuPointer consumed{};
     void push(MenuPointer event) noexcept {
-        if (count && events[count-1].down == event.down && events[count-1].active == event.active) {
-            events[count-1] = event; return;
+        if (count) {
+            const auto& tail = events[count - 1];
+            const auto& previous = count > 1 ? events[count - 2] : consumed;
+            // An edge owns its original position. Moving a queued release to
+            // a later hover position can cancel a click before Present sees it.
+            const bool motion = tail.down == previous.down && tail.active == previous.active;
+            if (motion && tail.down == event.down && tail.active == event.active) {
+                events[count - 1] = event; return;
+            }
         }
         // Bounded fail-safe: overflow cancels the drag rather than sticking it.
         if (count == events.size()) { count = 1; events[0] = {}; return; }
@@ -18,6 +26,7 @@ struct MenuPointerQueue {
     }
     MenuPointer pop() noexcept {
         const auto event = events[0];
+        consumed = event;
         for (unsigned i = 1; i < count; ++i) events[i-1] = events[i];
         --count;
         return event;

@@ -631,10 +631,9 @@ int main(int argc, char** argv) {
         // Drive the production XR entry point, not a synthetic Win32 click.
         wchar_t exe_path[32768]{};
         require(GetModuleFileNameW(nullptr, exe_path, 32768) != 0, "Test executable path");
-        const auto layer_path = std::filesystem::path(exe_path).parent_path().parent_path().parent_path() /
-            L"build/binding-regression/Release/CheekyOpenXRLayer.dll";
+        const auto layer_path = std::filesystem::path(exe_path).parent_path() / L"CheekyOpenXRLayer.dll";
         const auto layer = LoadLibraryW(layer_path.c_str());
-        require(layer != nullptr, "Build binding-regression layer before running XR host pointer integration test");
+        require(layer != nullptr, "Load matching OpenXR layer beside the overlay test executable");
         attach_input(window.value)->desktop_pointer_tick = 0;
         CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, false, true);
         draw(); draw();
@@ -647,6 +646,15 @@ int main(int argc, char** argv) {
         CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, false, true);
         draw(); draw(); draw();
         require(!pointer_checkbox, "OpenXR press/release between Presents must not be lost");
+        CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, true, true);
+        CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, false, true);
+        CheekyOpenXRMenuSetPointer(0, 0, false, true);
+        for (unsigned i = 0; i < 6; ++i) draw();
+        require(pointer_checkbox, "Motion after an XR release must not move the queued click off its checkbox");
+        CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, true, true);
+        CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, false, true);
+        for (unsigned i = 0; i < 6; ++i) draw();
+        require(!pointer_checkbox, "Queued click restores checkbox state");
         test_foreground = nullptr;
         SendMessageW(window.value, WM_KILLFOCUS, 0, 0);
         CheekyOpenXRMenuSetPointer(pointer_checkbox_position.x, pointer_checkbox_position.y, true, true);

@@ -697,7 +697,7 @@ void overlay_present(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, const
         if (r.attachment != runtime.attachment) { r.attachment = runtime.attachment; r.next_snapshot = 0; }
         const int desktop_events_begin = ImGui::GetCurrentContext()->InputEventsQueue.Size;
         process_overlay_input(*r.input, r.vr_buttons | unsigned(r.xr_pointer_down));
-        if (!r.input->open) { release_headset_input(r); r.xr_pointer_down = false; r.xr_pointer_active = false; global.xr_inputs.count = 0; hide_headset(r); ImGui::GetIO().ClearInputKeys(); ImGui::GetIO().ClearInputMouse(); return; }
+        if (!r.input->open) { release_headset_input(r); r.xr_pointer_down = false; r.xr_pointer_active = false; global.xr_inputs = {}; hide_headset(r); ImGui::GetIO().ClearInputKeys(); ImGui::GetIO().ClearInputMouse(); return; }
         release_cursor(*r.input);
         ImGui::GetIO().MouseDrawCursor = true;
         if (r.dx12) ImGui_ImplDX12_NewFrame(); else ImGui_ImplDX11_NewFrame();

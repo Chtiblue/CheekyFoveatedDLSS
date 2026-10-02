@@ -72,6 +72,10 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
+& (Join-Path $projectRoot "bin\$Configuration\CheekyOpenXRBindingTests.exe")
+if ($LASTEXITCODE -ne 0) { throw "OpenXR binding and pointer regressions failed." }
+& $testExecutable --cyberpunk-shared-gaze
+if ($LASTEXITCODE -ne 0) { throw "Cyberpunk shared-gaze regressions failed." }
 & $testExecutable --calibration-search
 if ($LASTEXITCODE -ne 0) { throw "Calibration locator scale and ambiguity regressions failed." }
 & $testExecutable --libovr-policy
@@ -116,6 +120,8 @@ foreach ($mode in @("native", "native-c", "streamline", "missing-lower", "public
 }
 
 $runtimeHostTest = Join-Path $projectRoot "bin\$Configuration\CheekyRuntimeHostTests.exe"
+& $runtimeHostTest --calibration-disabled
+if ($LASTEXITCODE -ne 0) { throw "Calibration startup opt-out regression failed." }
 foreach ($arguments in @(@(), @('--dx11'), @('--optiscaler'), @('--optiscaler','--dx11'), @('--conflict'), @('--transport'), @('--uevr','--transport'), @('--transport-init-failure'), @('--transport-release-drain'), @('--optiscaler','--transport'), @('--transport-forwarded'), @('--optiscaler','--transport-forwarded'))) {
     & $runtimeHostTest @arguments
     if ($LASTEXITCODE -ne 0) { throw "Generic runtime tests failed: $arguments" }
@@ -152,6 +158,8 @@ foreach ($mode in @('proxy','version','asi','missing','chain','broken-chain','lo
     if ($LASTEXITCODE -ne 0) { throw "Bootstrap tests failed: $mode" }
 }
 $overlayTest = Join-Path $projectRoot "bin\$Configuration\CheekyOverlayTests.exe"
+& $overlayTest --shared11
+if ($LASTEXITCODE -ne 0) { throw "Shared DX11 menu texture regression failed." }
 & $overlayTest --ui
 if ($LASTEXITCODE -ne 0) { throw "Overlay diagnostic UI tests failed." }
 foreach ($api in @('dx11','dx12')) {
