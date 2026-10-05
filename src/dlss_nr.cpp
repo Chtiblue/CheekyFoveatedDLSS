@@ -927,6 +927,7 @@ bool resolve_afw_nr_coverage(DlssNrFrame& frame, Settings& settings) noexcept {
     coverage.width = settings.afw_nr.width; coverage.height = settings.afw_nr.height;
     coverage.x_offset = settings.afw_nr.x; coverage.height_offset = settings.afw_nr.y;
     coverage.afw_gaze_width = settings.afw_nr.gaze_width; coverage.afw_gaze_height = settings.afw_nr.gaze_height;
+    coverage.afw_gaze_height_bias = settings.afw_nr.gaze_height_bias;
     coverage.afw_nr_coverage = true;
     coverage.afw_mask = settings.afw_nr_mask;
     CropGeometry crop{}; bool reset{};

@@ -440,6 +440,12 @@ int main(int argc, char** argv) {
         command("1\n80\ncalibration_disable");
         require(received.find("\"status\":\"Disabled\"") != received.npos, "Calibration disable command");
         command("1\n81\ncalibration_enable");
+        command("1\n83\nset\nManualStereoMapping=true");
+        require(received.find("\"status\":\"Disabled\"") != received.npos, "Manual mapping disables automatic calibration");
+        command("1\n84\ncalibration_enable");
+        require(received.find("\"status\":\"Disabled\"") != received.npos, "Manual mapping cannot enable marker calibration");
+        command("1\n85\nset\nManualStereoMapping=false\nEyeCalibrationMethod=0");
+        require(received.find("Waiting for OpenVR, OpenXR or LibOVR") != received.npos, "Automatic mapping resumes calibration");
         command("1\n82\ncalibration_reset");
         command("1\n86\ncalibration_recalibrate");
         require(received.find("Waiting for OpenVR, OpenXR or LibOVR") != received.npos, "Unavailable backend must not claim active calibration");

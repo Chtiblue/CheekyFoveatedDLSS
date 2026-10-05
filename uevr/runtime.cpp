@@ -404,7 +404,7 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Start(const CheekyRuntimeSta
         *input->attachment = s.attachment_sequence;
         adapter_attached = true;
         allow_afw_stereo_projection(s.host == CheekyRuntimeHost::uevr);
-        eye_calibration_enable(true);
+        eye_calibration_enable(!configured_settings().manual_stereo_mapping);
         s.cadence.reset();
         set_processing_allowed(s.graphics_ready);
         request_save(s);
@@ -521,7 +521,7 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
         s.request = id;
         if (action == "get") return true;
         if (action == "calibration_enable" || action == "calibration_disable") {
-            eye_calibration_enable(action == "calibration_enable"); return true;
+            eye_calibration_enable(action == "calibration_enable" && !configured_settings().manual_stereo_mapping); return true;
         }
         if (action == "calibration_reset") { eye_calibration_reset_stats(); return true; }
         if (action == "calibration_forget") {
@@ -541,6 +541,7 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
         if (action == "save") { request_save(s); return true; }
         if (action == "reset_nr") { reset_dlss_nr(); return true; }
         auto settings = configured_settings();
+        const bool was_manual_mapping = settings.manual_stereo_mapping;
         if (action == "defaults") {
             settings = Settings{};
         }
@@ -564,7 +565,10 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
             }
             if (!count) return false;
         } else { s.message = "Unknown command"; return false; }
-        update_settings(settings); ++s.revision; s.applied_request = id;
+        update_settings(settings);
+        if (was_manual_mapping != settings.manual_stereo_mapping)
+            eye_calibration_enable(!settings.manual_stereo_mapping);
+        ++s.revision; s.applied_request = id;
         s.message = "Settings applied"; request_save(s); return true;
     } catch (...) { return false; }
 }

@@ -28,7 +28,7 @@ The main controls and their defaults are:
 | Automatic stereo alignment | On | Uses OpenXR or usable Streamline projection data to align each eye without manual X adjustment. |
 | Stereo X offset | `0.00` | Manual horizontal placement; shown when two views are detected, Fixed is selected, and automatic alignment is off. |
 | Invert stereo eye order | Off | Advanced override under Stereo mapping override for reversed packed eye order and manual stereo offsets. |
-| Height offset | `0.00` | Moves fixed placement up (negative) or down (positive). With automatic alignment, zero preserves the detected center. In gaze modes this is Fallback height offset and does not shift valid gaze. |
+| Height offset | `0.00` | Moves fixed and eye-tracked placement up (negative) or down (positive), including tracking-loss fallback. Zero preserves the detected center. |
 | Roundness | `0.00` | Blends the region shape from rectangular (`0`) to elliptical (`1`). This does not affect performance. |
 | Transition width | `0.040` | Feathers the edge of the region. |
 | Show 5 px red alignment border | Off | Displays the processed region while calibrating the fovea. |
@@ -67,8 +67,8 @@ Automatic alignment controls both horizontal and vertical placement, keeping the
 center stable when the fovea size changes, except where the crop reaches an image
 edge. With automatic alignment enabled, **Height offset** adjusts the fixed center up
 or down; zero preserves the detected center. This preference starts at zero and
-is saved separately from legacy manual placement. In gaze modes it is labeled
-**Fallback height offset** and never shifts valid gaze. **Stereo X offset** is
+is saved separately from legacy manual placement. The same **Height offset**
+also shifts valid runtime and simulated gaze, including AFW coverage. **Stereo X offset** is
 shown only for manual fixed placement. An advanced **Stereo mapping override**
 retains eye-order inversion for reversed packed layouts.
 DLSS-SR and foveated DLSS-NR share the selected gaze/alignment center. NR keeps
@@ -111,8 +111,8 @@ DLSS-view mappings for both eyes. **Eye gaze extension: Yes** alone does not mea
 the headset supplies eye tracking.
 
 Valid gaze sets both eye centers directly; it needs no manual stereo X offset.
-**Fallback height offset** only adjusts fixed placement when gaze is unavailable
-and does not shift valid gaze. If tracking is unavailable, a red message appears
+**Height offset** shifts valid gaze and fixed fallback placement. Leave it at
+zero unless a game needs a vertical placement correction. If tracking is unavailable, a red message appears
 directly below the selector and the add-on falls back to fixed placement, using
 automatic alignment where available and saved manual placement otherwise.
 Temporary signal loss, such as a blink, holds the last valid gaze for

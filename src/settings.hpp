@@ -56,8 +56,9 @@ struct Settings {
     unsigned afw_source_eye{UINT32_MAX}; // Verified identity scoped to the original core evaluation.
     bool eye_independent_coverage{}; // Transient: never mirror a resolved AFW envelope by guessed view role.
     float afw_gaze_width{}, afw_gaze_height{}; // Requested size before the fixed fallback envelope expands it.
+    float afw_gaze_height_bias{}; // Transient placement bias before fallback geometry is baked.
     struct AfwNrCoverage {
-        float width{}, height{}, x{}, y{}, gaze_width{}, gaze_height{};
+        float width{}, height{}, x{}, y{}, gaze_width{}, gaze_height{}, gaze_height_bias{};
     } afw_nr; // Evaluation-local NR envelope; never persisted.
     bool afw_nr_coverage{}; // NR uses its own gaze allocation without replacing SR coverage diagnostics.
     FoveationMask afw_mask{}, afw_nr_mask{};

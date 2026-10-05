@@ -38,7 +38,19 @@ The OpenXR installation is shared across games. Install all plugin files and the
 
 For AFW, follow the dedicated instructions below. Per-eye mode uses the usual eye calibration setup.
 
-Keep **Fixed**, **Automatic stereo alignment** and **Automatic eye calibration** enabled. Use the red alignment border to check both eyes, then open **Stereo and gaze → Eye calibration**. Check that calibration becomes **Active** and both regions stay aligned through loading/menu transitions.
+Select **Fixed**, enable **Automatic stereo alignment**, and use **Auto** as the mapping method. Use the red alignment border to check both eyes, then open **Stereo and gaze → Stereo Eye Mapping**. Check that calibration becomes **Active** and both regions stay aligned through loading/menu transitions.
+
+In **Stereo Eye Mapping**, **Mapping method** offers Auto, Standard corners,
+Timing tolerant corners, Full crop search and Manual. Manual disables automatic
+marker calibration and enables **First DLSS view is right eye** (off means left
+first). It assumes full-eye images with matching XR coordinates; use the red
+border to verify both eyes and edges. Returning to an automatic method restarts
+calibration; there is no separate calibration enable switch. Existing verified mapping routes still take precedence over the
+manual fallback.
+
+**Height offset** moves fixed, runtime-gaze and simulated-gaze placement, including
+AFW and tracking-loss fallback. Negative moves up; positive moves down. Zero
+preserves the detected center.
 
 Manual stereo offsets are a troubleshooting fallback, not a replacement for calibration: scene changes can swap eye assignments. If calibration does not become active, check the layer installation and collect a report.
 

@@ -272,10 +272,9 @@ local function afw_controls()
         for key, enabled in pairs(edits) do draft[key], dirty[key], ready_edits[key] = enabled, enabled, enabled end
     end
     if mode == 2 then
-        slider(gaze and "Fallback height offset" or "Height offset", "AlignedHeightOffset", -1, 1)
+        -- Height is edited once in Foveation placement below.
     elseif mode == 1 then
         slider(gaze and "Fallback stereo X offset" or "Stereo X offset", "XOffset", -1, 1)
-        slider(gaze and "Fallback height offset" or "Height offset", "HeightOffset", -1, 1)
     end
     if mode == 0 then text("Uses the configured region and calibrated eye alignment.")
     elseif gaze then text("Gaze follows both eyes. The fallback above applies when tracking is unavailable.") end
@@ -336,19 +335,63 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             afw_controls()
             afw_active = draft.AfwAutomaticCoverage or draft.AfwManualCoverage
         end
+        section("Foveation placement")
+        local aligned_height = afw_active and draft.AfwAutomaticCoverage or (not afw_active and draft.AutoStereoAlignment)
+        slider("Height offset", aligned_height and "AlignedHeightOffset" or "HeightOffset", -1, 1)
+        text("Moves fixed and eye-tracked placement. Negative = up; positive = down.")
         if afw_active then
             if draft.AfwAutomaticCoverage and afw.coverage_mode ~= 2 and afw.coverage_mode ~= 3 then
                 text("Automatic coverage is waiting for matching UEVR projections; using centered fallback.")
             end
         else
             check("Automatic stereo alignment", "AutoStereoAlignment")
-            if draft.AutoStereoAlignment then slider("Height offset / gaze fallback", "AlignedHeightOffset", -1, 1)
-            else
-                slider("Manual stereo X offset", "XOffset", -1, 1)
-                slider("Manual height offset", "HeightOffset", -1, 1)
-            end
-            check("Invert stereo eye order", "InvertStereoXOffset")
+            if not draft.AutoStereoAlignment then slider("Manual stereo X offset", "XOffset", -1, 1) end
+            if not draft.AutoStereoAlignment then check("Invert stereo eye order", "InvertStereoXOffset") end
         end
+        if imgui.tree_node("Stereo Eye Mapping") then
+            local c = status.eye_calibration or {}
+            if status.settings.EyeCalibrationMethod ~= nil then
+                local methods = {[0]="Auto",[1]="Standard corners",[2]="Timing tolerant corners",[3]="Full crop search",[4]="Manual"}
+                local selected = draft.ManualStereoMapping and 4 or draft.EyeCalibrationMethod
+                local changed, method = imgui.combo("Mapping method", selected, methods)
+                if changed then
+                    local edits = {ManualStereoMapping = method == 4}
+                    if method ~= 4 then edits.EyeCalibrationMethod = method end
+                    for key, value in pairs(edits) do draft[key], dirty[key], ready_edits[key] = value, value, value end
+                end
+                imgui.begin_disabled(not draft.ManualStereoMapping)
+                check("First DLSS view is right eye", "ManualStereoRightFirst")
+                imgui.end_disabled()
+                if draft.ManualStereoMapping then
+                    text("Manual: assumes full-eye images with matching XR coordinates.")
+                    text("Off means left eye first. No crop, flip or projection changes.")
+                    text("Check both eyes and image edges with the red alignment border.")
+                end
+            end
+            if not draft.ManualStereoMapping then
+                local methods = {[0]="Auto",[1]="Standard corners",[2]="Timing tolerant corners",[3]="Full crop search"}
+                local learned = status.settings.EyeCalibrationLearnedMethod or 0
+                text("Learned starting method: " .. (learned > 0 and methods[learned] or "Not learned yet"))
+                text("Active method: " .. (c.active_method or "Waiting"))
+                if status.settings.EyeCalibrationLearnedMethod == 2 and (status.settings.EyeCalibrationLearnedSessions or 0) < 2 then
+                    text("Timing preference needs confirmation on another launch.")
+                end
+                if imgui.button("Reset learned calibration method") then send("calibration_forget") end
+            end
+            if not draft.ManualStereoMapping and status.settings.EyeCalibrationContinuous ~= nil then
+                if draft.EyeCalibrationMethod == 3 or (draft.EyeCalibrationMethod == 0 and c.active_method == "Full crop search") then
+                    check("Continuously validate eye calibration", "EyeCalibrationContinuous")
+                    if draft.EyeCalibrationContinuous == false then
+                        text("Recalibrates only when views, dimensions, submission bounds, or the VR session change. Same-view eye swaps and image crop changes are not detected.")
+                    end
+                end
+                if c.enabled and imgui.button("Recalibrate now") then send("calibration_recalibrate") end
+            end
+            rows("eye_calibration", {{"Runtime", c.backend or "Waiting for VR"},
+                {"Status", draft.ManualStereoMapping and "Manual (unverified full-eye layout)" or c.status or "Unavailable in this runtime"}})
+            imgui.tree_pop()
+        end
+        section("Eye tracking")
         if draft.CenterMode == 2 then
             combo("Simulation pattern", "SimulationPattern", {[0]="Figure eight (8 s)",[1]="Slow sweep (20 s)",
                 [2]="Jump every 2 s",[3]="Jump every 8 s",[4]="Tracking loss",[5]="Hold center"})
@@ -356,14 +399,10 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             if draft.SimulationPattern == 2 or draft.SimulationPattern == 3 then check("Show next jump target", "ShowNextJumpTarget") end
             if draft.SimulationPattern == 4 then text("Moves for 4 s, loses tracking for 1 s, then recovers.") end
         end
-        if imgui.tree_node("Gaze compatibility (opt-in)") then
-            check("Manual full-eye stereo mapping", "ManualStereoMapping")
-            if draft.ManualStereoMapping then
-                check("First DLSS view is right eye", "ManualStereoRightFirst")
-                text("Off means left eye first. Requires full-eye images with matching XR coordinates; no crop, flip or projection changes. Check both eyes with the red border.")
-            end
+        if imgui.tree_node("OpenXR input compatibility") then
             check("Independent OpenXR gaze (restart application required)", "IndependentOpenXRGaze")
-            text("For hosts without OpenXR input only. Attaches gaze after 90 frames; later host input initialization cannot attach until restart.")
+            text("For hosts without OpenXR input only. Attaches gaze after 90 frames.")
+            text("Later host input initialization cannot attach until restart.")
             imgui.tree_pop()
         end
         if imgui.tree_node("Advanced eye tracking") then
@@ -385,34 +424,6 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
         end
         if draft.CenterMode ~= 0 or not afw_active then
             text("OpenXR alignment/gaze uses the matching Cheeky layer. Fixed alignment needs no eye tracker.")
-        end
-        if imgui.tree_node("Eye calibration") then
-            local c = status.eye_calibration or {}
-            local changed, enabled = imgui.checkbox("Automatic eye calibration (this session)", c.enabled == true)
-            if changed then send(enabled and "calibration_enable" or "calibration_disable") end
-            if status.settings.EyeCalibrationMethod ~= nil then
-                local methods = {[0]="Auto",[1]="Standard corners",[2]="Timing tolerant corners",[3]="Full crop search"}
-                combo("Calibration method", "EyeCalibrationMethod", methods)
-                local learned = status.settings.EyeCalibrationLearnedMethod or 0
-                text("Learned starting method: " .. (learned > 0 and methods[learned] or "Not learned yet"))
-                text("Active method: " .. (c.active_method or "Waiting"))
-                if status.settings.EyeCalibrationLearnedMethod == 2 and (status.settings.EyeCalibrationLearnedSessions or 0) < 2 then
-                    text("Timing preference needs confirmation on another launch.")
-                end
-                if imgui.button("Reset learned calibration method") then send("calibration_forget") end
-            end
-            if status.settings.EyeCalibrationContinuous ~= nil then
-                if draft.EyeCalibrationMethod == 3 or (draft.EyeCalibrationMethod == 0 and c.active_method == "Full crop search") then
-                    check("Continuously validate eye calibration", "EyeCalibrationContinuous")
-                    if draft.EyeCalibrationContinuous == false then
-                        text("Recalibrates only when views, dimensions, submission bounds, or the VR session change. Same-view eye swaps and image crop changes are not detected.")
-                    end
-                end
-                if c.enabled and imgui.button("Recalibrate now") then send("calibration_recalibrate") end
-            end
-            rows("eye_calibration", {{"Runtime", c.backend or "Waiting for VR"},
-                {"Status", c.status or "Unavailable in this runtime"}})
-            imgui.tree_pop()
         end
         reset_group("Reset Stereo / gaze defaults", "gaze")
         imgui.tree_pop()

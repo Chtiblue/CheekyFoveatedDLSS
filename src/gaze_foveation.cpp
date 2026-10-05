@@ -314,6 +314,7 @@ bool calculate_afw_crop(const Settings& settings, DlssViewId view_id, IUnknown* 
         valid &= source.structure_size >= sizeof(source) && source.view_index == eye && (source.flags & CHEEKY_GAZE_VIEW_ORIENTATION_VALID) &&
             afw_project_gaze(source, projection.projections[eye], source.center_u, source.center_v, raw[eye]);
     }
+    for (auto& center : raw) center.v = std::clamp(center.v + settings.afw_gaze_height_bias, 0.F, 1.F);
     diagnostics.status_flags = loaded ? snapshot.status_flags : 0;
     diagnostics.sample_age_ms = loaded && snapshot.publication_qpc && now >= snapshot.publication_qpc
         ? static_cast<float>(seconds_between(now, snapshot.publication_qpc) * 1000.) : -1.F;
@@ -393,6 +394,7 @@ bool calculate_afw_crop(const Settings& settings, DlssViewId view_id, IUnknown* 
                 afw_project_gaze(source, projection.projections[eye], source.next_jump_u, source.next_jump_v, target);
             next_valid &= projected;
             if (projected) {
+                target.v = std::clamp(target.v + settings.afw_gaze_height_bias, 0.F, 1.F);
                 next.include(target, settings.afw_gaze_width, settings.afw_gaze_height);
                 afw_mask_include(next_mask, target, settings.afw_gaze_width, settings.afw_gaze_height, settings.afw_warp_margin,
                     &projection, eye, settings.afw_source_eye);
@@ -522,7 +524,7 @@ bool calculate_coordinated_crop(
         diagnostics.alignment_source = source;
         if (source != 0U) center = {u, v, 1U};
         // A user bias for fixed placement (including gaze-loss fallback),
-        // never added to a valid gaze sample. Independent of fovea size.
+        // also applied to gaze samples below. Independent of fovea size.
         if (automatic) {
             center.v = std::clamp(center.v + 0.5F * settings.aligned_height_offset, 0.F, 1.F);
             center.quantization_pixels = 1U;
@@ -950,6 +952,8 @@ bool calculate_coordinated_crop(
         sample_age_seconds <= gaze_stale_seconds;
     const bool use_sample = mapping_stable && snapshot_valid && (!shared_source ||
         (std::isfinite(shared_view.center_u) && std::isfinite(shared_view.center_v)));
+    const float height_bias = automatic ? .5F * settings.aligned_height_offset :
+        fixed_center(fixed_settings, render_width, render_height).v - .5F;
     if (use_sample && settings.show_next_jump_target &&
         settings.center_mode == FoveationCenterMode::simulated_gaze &&
         (settings.simulation_pattern == 2U || settings.simulation_pattern == 3U)) {
@@ -957,7 +961,7 @@ bool calculate_coordinated_crop(
         CropGeometry next_crop{};
         if ((target.flags & CHEEKY_GAZE_VIEW_NEXT_JUMP_VALID) != 0U &&
             calculate_foveation_geometry_at_center(foveation_parameters(fixed_settings),
-                {target.next_jump_u, calibrated_vertical_flip ? 1.F - target.next_jump_v : target.next_jump_v,
+                {target.next_jump_u, std::clamp((calibrated_vertical_flip ? 1.F - target.next_jump_v : target.next_jump_v) + height_bias, 0.F, 1.F),
                     settings.gaze_quantization_pixels},
                 render_width, render_height, output_width, output_height,
                 output_origin_x, output_origin_y, next_crop)) {
@@ -971,7 +975,7 @@ bool calculate_coordinated_crop(
     if (use_sample) {
         const auto& source = shared_source ? shared_view : snapshot.views[state.mapping.view_index];
         raw_u = source.center_u;
-        raw_v = calibrated_vertical_flip ? 1.F - source.center_v : source.center_v;
+        raw_v = std::clamp((calibrated_vertical_flip ? 1.F - source.center_v : source.center_v) + height_bias, 0.F, 1.F);
     }
     const auto temporal_result = update_gaze_temporal_policy(
         state.temporal,

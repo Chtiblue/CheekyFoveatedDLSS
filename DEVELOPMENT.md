@@ -7,7 +7,8 @@ Requires Visual Studio 2022 or newer with Desktop development with C++ and a Win
 The Stereo/gaze controls in standalone, UEVR and ReShade expose two independent,
 per-application options, both disabled by default:
 
-- `ManualStereoMapping`: permits the full-eye layout fallback when automatic
+- `ManualStereoMapping`: selected by Stereo Eye Mapping > Mapping method > Manual;
+  suspends marker calibration in the runtime while selected and permits the full-eye layout fallback when automatic
   routes cannot map distinct eye resources. `ManualStereoRightFirst` selects
   right-first instead of left-first DLSS evaluation order. This assumes matching
   source/XR coordinates, with no crop, flip or projection change; dimensions alone

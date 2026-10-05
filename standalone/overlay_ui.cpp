@@ -195,19 +195,15 @@ void draw_gaze(Settings& s) {
         ImGui::TextWrapped("Runtime gaze needs the Cheeky OpenXR layer or a supported OpenVR runtime. Fixed placement is used when tracking is unavailable.");
     if (!s.auto_stereo_alignment && s.center_mode == FoveationCenterMode::fixed)
         slider("Stereo X offset", s.x_offset, -1.0F, 1.0F);
-    slider(s.center_mode == FoveationCenterMode::fixed ? "Height offset" : "Fallback height offset",
+    slider("Height offset",
         s.auto_stereo_alignment ? s.aligned_height_offset : s.height_offset, -1.0F, 1.0F);
-    if (ImGui::TreeNode("Stereo mapping override")) {
+    if (!s.auto_stereo_alignment && ImGui::TreeNode("Stereo mapping override")) {
         ImGui::Checkbox("Invert stereo eye order", &s.invert_stereo_x_offset);
         ImGui::TextWrapped("For packed layouts with reversed eye order; normally leave off.");
         ImGui::TreePop();
     }
-    if (ImGui::TreeNode("Gaze compatibility (opt-in)")) {
-        ImGui::Checkbox("Manual full-eye stereo mapping", &s.manual_stereo_mapping);
-        if (s.manual_stereo_mapping) {
-            ImGui::Checkbox("First DLSS view is right eye", &s.manual_stereo_right_first);
-            ImGui::TextWrapped("Off means left eye first. Assumes two full-eye images with identical XR coordinates: no crop, flip or projection changes. Use the red alignment border to check both eyes, including the edges.");
-        }
+    ImGui::TextWrapped("Height offset moves fixed and eye-tracked placement. Negative = up; positive = down.");
+    if (ImGui::TreeNode("OpenXR input compatibility")) {
         ImGui::Checkbox("Independent OpenXR gaze (restart application required)", &s.independent_openxr_gaze);
         ImGui::TextWrapped("For hosts without OpenXR input only. After 90 frames, lets the layer attach gaze actions. A host that initializes input later cannot attach its own actions until restart.");
         ImGui::TreePop();
@@ -429,15 +425,20 @@ void draw_gaze_details(std::string_view snapshot) {
 }
 
 void draw_calibration_controls(OverlayUiState& r, const OverlayRuntime& runtime) {
-    ImGui::SeparatorText("Eye calibration");
-    bool enabled = flag(member(r.snapshot, "eye_calibration"), "enabled");
-    if (ImGui::Checkbox("Automatic eye calibration (this session)", &enabled))
-        command(r, runtime, enabled ? "calibration_enable" : "calibration_disable");
-    ImGui::BeginDisabled(!enabled);
-    int method = int(r.draft.eye_calibration_method);
-    if (ImGui::Combo("Calibration method", &method,
-            "Auto\0Standard corners\0Timing tolerant corners\0Full crop search\0"))
-        r.draft.eye_calibration_method = static_cast<EyeCalibrationMethod>(method);
+    ImGui::SeparatorText("Stereo Eye Mapping");
+    int method = r.draft.manual_stereo_mapping ? 4 : int(r.draft.eye_calibration_method);
+    if (ImGui::Combo("Mapping method", &method,
+            "Auto\0Standard corners\0Timing tolerant corners\0Full crop search\0Manual\0")) {
+        r.draft.manual_stereo_mapping = method == 4;
+        if (method != 4) r.draft.eye_calibration_method = static_cast<EyeCalibrationMethod>(method);
+    }
+    ImGui::BeginDisabled(!r.draft.manual_stereo_mapping);
+    ImGui::Checkbox("First DLSS view is right eye", &r.draft.manual_stereo_right_first);
+    ImGui::EndDisabled();
+    if (r.draft.manual_stereo_mapping) {
+        ImGui::TextWrapped("Manual assumes full-eye images with matching XR coordinates: no crop, flip or projection changes. Off means left eye first. Check both eyes and image edges with the red border.");
+        return;
+    }
     const auto learned = unsigned(number(member(r.snapshot, "settings"), "EyeCalibrationLearnedMethod"));
     ImGui::Text("Learned starting method: %s", learned ? eye_calibration_method_name(static_cast<EyeCalibrationMethod>(learned)) : "Not learned yet");
     if (learned == 2 && number(member(r.snapshot, "settings"), "EyeCalibrationLearnedSessions") < 2)
@@ -455,7 +456,6 @@ void draw_calibration_controls(OverlayUiState& r, const OverlayRuntime& runtime)
             ImGui::TextWrapped("Keeps the learned alignment without validation markers until views, dimensions, submission bounds, or the VR session change. Eye swaps or image crop changes within unchanged views are not detected.");
     }
     if (ImGui::Button("Recalibrate now")) command(r, runtime, "calibration_recalibrate");
-    ImGui::EndDisabled();
 }
 
 void draw_calibration(OverlayUiState& r, const OverlayRuntime& runtime) {

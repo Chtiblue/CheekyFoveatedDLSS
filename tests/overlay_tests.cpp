@@ -167,7 +167,8 @@ void test_ui_diagnostics() {
     text = render("Stereo / Gaze");
     require(text.find("fixed fallback") == text.npos && text.find("manual fallback placement") == text.npos, "Healthy tracking reported as fallback");
     require(text.find("Eye Tracking Ready: Yes") != text.npos, "Visible eye tracking readiness missing");
-    require(text.find("Automatic eye calibration (this session)") != text.npos &&
+    require(text.find("Automatic eye calibration (this session)") == text.npos &&
+        text.find("Mapping method") != text.npos &&
         text.find("Recalibrate now") != text.npos && text.find("Recalibration") != text.npos,
         "Calibration controls belong in Stereo / Gaze");
     require(text.find("Eye tracking details") == text.npos && text.find("Corrections applied") == text.npos, "Tracking details belong in Diagnostics");

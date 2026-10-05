@@ -1252,7 +1252,7 @@ void test_packed_alignment_coordinator(bool openvr = false) {
         const float actual = (crops[i].input_base_x + crops[i].input_width * 0.5F) / 1512.F;
         expect_near(actual, snapshot.views[i].center_u, 0.004F, "gaze center is not offset a second time");
         expect_near((crops[i].input_base_y + crops[i].input_height * 0.5F) / 1418.F,
-            snapshot.views[i].center_v, 0.004F, "fixed height bias never shifts valid gaze");
+            snapshot.views[i].center_v - .1F, 0.004F, "height bias shifts valid gaze once with automatic alignment");
     }
     settings.center_mode = FoveationCenterMode::simulated_gaze;
     snapshot.status_flags |= CHEEKY_GAZE_STATUS_SIMULATED;
@@ -1313,7 +1313,7 @@ void test_packed_alignment_coordinator(bool openvr = false) {
         frame(); frame(); frame();
         for (unsigned i = 0; i < 2; ++i)
             expect_near((crops[i].input_base_y + crops[i].input_height * 0.5F) / 1418.F,
-                1.F - snapshot.views[i].center_v, 0.004F, "Flipped submissions must invert gaze into DLSS coordinates");
+                1.F - snapshot.views[i].center_v + .5F * settings.aligned_height_offset, 0.004F, "Flipped submissions apply height bias once after mapping into DLSS coordinates");
         settings.center_mode = FoveationCenterMode::fixed;
         settings.aligned_height_offset = 0;
         snapshot.views[0].forward_v = 0.3F; snapshot.views[1].forward_v = 0.65F;
@@ -2501,6 +2501,24 @@ void test_afw_gaze_integration() {
         "AFW gaze starts without two-eye resource or marker mapping");
     expect(!gaze_diagnostics().views[0].resource_mapped && !gaze_diagnostics().views[1].resource_mapped,
         "Bilateral gaze does not claim a DLSS handle-to-eye assignment");
+    const auto unbiased = crop;
+    requested.aligned_height_offset = -.2F;
+    settings = afw_experiment_settings(requested, &projection);
+    fresh(); expect(evaluate(), "AFW height offset applies to a live sample");
+    for (const auto& eye : gaze_diagnostics().views)
+        expect_near(eye.center_v, .4F, .001F, "AFW live gaze uses height bias once");
+    expect(crop.input_base_y < unbiased.input_base_y && crop.input_height == unbiased.input_height,
+        "AFW height correction translates the crop without resizing it");
+    requested.center_mode = FoveationCenterMode::fixed;
+    settings = afw_experiment_settings(requested, &projection);
+    fresh(); expect(evaluate(), "AFW fixed height offset evaluates");
+    expect_near((crop.input_base_y + crop.input_height * .5F) / 800.F, .4F, .004F,
+        "AFW fixed and gaze modes share the same height adjustment");
+    requested.center_mode = FoveationCenterMode::openxr_gaze;
+    requested.aligned_height_offset = 0;
+    settings = afw_experiment_settings(requested, &projection);
+    reset_gaze_foveation();
+    fresh(); expect(evaluate(), "AFW gaze reacquires after height test");
     const auto first = crop;
     fresh(); expect(evaluate() && !reset && crop.input_width == first.input_width && crop.input_base_x == first.input_base_x,
         "Stable gaze reuses geometry and does not reset history each frame");

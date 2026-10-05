@@ -46,6 +46,7 @@ def run(engine):
         disabled = {false}
         slider_ranges = {}
         tree_stack, tree_order, tree_parents, closed_trees = {}, {}, {}, {}
+        fs = {read = function() return "disableMod=0" end}
         uevr = {api = {}, lua = {}, sdk = {callbacks = {}}}
         for _, name in ipairs({'on_lua_event', 'on_frame'}) do
             uevr.sdk.callbacks[name] = function(fn) callbacks[name] = fn end
@@ -110,6 +111,8 @@ def run(engine):
     g.json.load_string = lambda text: to_lua(json.loads(text))
     lua.execute((ROOT / "uevr/scripts/cheeky_foveated_dlss.lua").read_text())
 
+    g.callbacks.on_lua_event("cheeky.foveated_dlss.load_state.v1", "enabled")
+
     def draw(click=None, changes=None):
         g.drawn = lua.table()
         g["values"] = lua.table()
@@ -159,6 +162,33 @@ def run(engine):
     state["d3d12_hook_restart_required"] = False
     receive(state)
     draw()
+    # Mapping selection is one transaction; manual-only eye order cannot edit Auto.
+    count = len(g.sent)
+    draw(changes={"First DLSS view is right eye": True})
+    assert len(g.sent) == count
+    draw(changes={"Mapping method": 4})
+    assert "ManualStereoMapping=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["ManualStereoMapping"] = True
+    receive(state)
+    draw(changes={"First DLSS view is right eye": True})
+    assert "ManualStereoRightFirst=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["ManualStereoRightFirst"] = True
+    receive(state)
+    draw(changes={"Mapping method": 2})
+    assert "ManualStereoMapping=false" in last() and "EyeCalibrationMethod=2" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"].update(ManualStereoMapping=False, EyeCalibrationMethod=2)
+    receive(state)
+    for center_mode in (0, 1, 2):
+        height_state = copy.deepcopy(state)
+        height_state["settings"].update(CenterMode=center_mode, AlignedHeightOffset=.2, AutoStereoAlignment=True)
+        receive(height_state)
+        draw()
+        assert g["values"]["Height offset"] == .2
+        assert "Fallback height offset" not in g["values"]
+    receive(state)
     rr = copy.deepcopy(state)
     rr["renderer"] = 1
     rr["apis"] = [{}, {"reconstruction_feature": 13}]
@@ -195,11 +225,12 @@ def run(engine):
     draw()
     assert any(t == "Selected" for t in g.drawn.values())
     assert not g.trees["AFW details"] and g.trees["Support"] and g.trees["Performance"]
-    assert g.trees["Eye calibration"] and not g.trees["Eye mapping details"]
+    assert g.trees["Stereo Eye Mapping"] and g.tree_parents["Stereo Eye Mapping"] == "Stereo and gaze"
     assert len(g.sent) == count, "AFW effective overrides must not rewrite saved preferences"
     assert "Foveation center" in g["values"] and "Enable DLSS-NR" in g["values"]
-    assert "Automatic stereo alignment" in g["values"] and "Invert stereo eye order" in g["values"]
-    assert "Automatic eye calibration (this session)" in g["values"]
+    assert "Automatic stereo alignment" in g["values"]
+    assert ("Invert stereo eye order" in g["values"]) == (not afw["settings"]["AutoStereoAlignment"])
+    assert "Automatic eye calibration (this session)" not in g["values"]
     assert "Center supersampling" in g["values"]
     afw["settings"].update(NrEnabled=True, NrFoveated=True, NrUseSrFoveation=False)
     receive(afw)
@@ -263,8 +294,9 @@ def run(engine):
     afw["afw_experiment"].update(coverage_enabled=False, rendering_mode=2)
     receive(afw)
     draw()
-    assert "Automatic stereo alignment" in g["values"] and "Invert stereo eye order" in g["values"]
-    assert "Automatic eye calibration (this session)" in g["values"]
+    assert "Automatic stereo alignment" in g["values"]
+    assert ("Invert stereo eye order" in g["values"]) == (not afw["settings"]["AutoStereoAlignment"])
+    assert "Automatic eye calibration (this session)" not in g["values"]
     assert "AFW stereo coverage" not in g["values"]
     assert len(g.sent) == count, "Live AFW off/on must not rewrite preferences"
     afw["afw_experiment"].update(coverage_enabled=True, rendering_mode=3)
@@ -315,7 +347,7 @@ def run(engine):
     order = list(g.tree_order.values())
     assert order.index("Stereo and gaze") < order.index("DLSS-SR") < order.index("DLSS-NR (experimental)")
     assert g.tree_parents["Performance"] == "Cheeky Foveated DLSS"
-    assert g.tree_parents["Eye calibration"] == "Stereo and gaze"
+    assert g.trees["Stereo Eye Mapping"] and g.tree_parents["Stereo Eye Mapping"] == "Stereo and gaze"
     for removed in ("AFW details", "GPU timestamp collection", "Eye mapping details", "DLSS view details",
                     "DX11 interception", "DX12 interception", "SR resolution and GPU timing", "NR status and GPU timing"):
         assert not g.trees[removed], "Developer diagnostics must stay in support reports: " + removed
@@ -342,10 +374,15 @@ def run(engine):
     receive(state)
     draw()
     assert any("Waiting for VR" in str(t) for t in g.drawn.values())
-    draw(changes={"Automatic eye calibration (this session)": False})
-    assert last().endswith("\ncalibration_disable")
-    draw(changes={"Automatic eye calibration (this session)": True})
-    assert last().endswith("\ncalibration_enable")
+    assert "Automatic eye calibration (this session)" not in g["values"]
+    for automatic in (True, False):
+        visibility = copy.deepcopy(state)
+        visibility["settings"].update(AutoStereoAlignment=automatic, AfwManualCoverage=False, AfwAutomaticCoverage=False)
+        receive(visibility)
+        draw()
+        assert ("Invert stereo eye order" in g["values"]) == (not automatic)
+        assert "Mapping method" in g["values"] and g.trees["Stereo Eye Mapping"]
+    receive(state)
     for method in (1, 2):
         state["settings"]["EyeCalibrationMethod"] = method
         receive(state)

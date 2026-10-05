@@ -118,6 +118,9 @@ inline Settings afw_coverage_settings(Settings settings, const AfwStereoProjecti
     };
     const float width = finite(settings.width, .7F, .2F, 1.F);
     const float height = finite(settings.height, .7F, .2F, 1.F);
+    settings.afw_gaze_height_bias = settings.afw_automatic_coverage
+        ? .5F * finite(settings.aligned_height_offset, 0.F, -1.F, 1.F)
+        : .5F * (1.F - height) * finite(settings.height_offset, 0.F, -1.F, 1.F);
     settings.afw_gaze_width = width; settings.afw_gaze_height = height;
     settings.afw_warp_margin = finite(settings.afw_warp_margin, .05F, 0.F, .25F);
     const float manual_x = settings.x_offset;
@@ -181,7 +184,7 @@ inline Settings afw_experiment_settings(Settings settings, const AfwStereoProjec
     if (!settings.nr_use_sr_foveation) { nr.width = settings.nr_width; nr.height = settings.nr_height; }
     nr = afw_coverage_settings(nr, projection);
     settings = afw_coverage_settings(settings, projection);
-    settings.afw_nr = {nr.width, nr.height, nr.x_offset, nr.height_offset, nr.afw_gaze_width, nr.afw_gaze_height};
+    settings.afw_nr = {nr.width, nr.height, nr.x_offset, nr.height_offset, nr.afw_gaze_width, nr.afw_gaze_height, nr.afw_gaze_height_bias};
     settings.afw_nr_mask = nr.afw_mask;
     return settings;
 }

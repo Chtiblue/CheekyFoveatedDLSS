@@ -1315,13 +1315,13 @@ void draw_sr_controls(Settings& settings, bool& changed) {
             ImGuiSliderFlags_AlwaysClamp
         );
     }
-    if (has_multiple_stereo_views() && ImGui::TreeNode("Stereo mapping override")) {
+    if (!settings.auto_stereo_alignment && has_multiple_stereo_views() && ImGui::TreeNode("Stereo mapping override")) {
         changed |= ImGui::Checkbox("Invert stereo eye order", &settings.invert_stereo_x_offset);
         ImGui::TextDisabled("For packed layouts with reversed eye order; normally leave off.");
         ImGui::TreePop();
     }
     changed |= ImGui::SliderFloat(
-        settings.center_mode == FoveationCenterMode::fixed ? "Height offset" : "Fallback height offset",
+        "Height offset",
         settings.auto_stereo_alignment ? &settings.aligned_height_offset : &settings.height_offset,
         -1.0F,
         1.0F,
@@ -1355,12 +1355,7 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         "Show 5 px red alignment border",
         &settings.alignment_border_enabled
     );
-    if (ImGui::TreeNode("Gaze compatibility (opt-in)")) {
-        changed |= ImGui::Checkbox("Manual full-eye stereo mapping", &settings.manual_stereo_mapping);
-        if (settings.manual_stereo_mapping) {
-            changed |= ImGui::Checkbox("First DLSS view is right eye", &settings.manual_stereo_right_first);
-            ImGui::TextWrapped("Off means left eye first. Assumes two full-eye images with identical XR coordinates: no crop, flip or projection changes. Use the red alignment border to check both eyes, including the edges.");
-        }
+    if (ImGui::TreeNode("OpenXR input compatibility")) {
         changed |= ImGui::Checkbox("Independent OpenXR gaze (restart application required)", &settings.independent_openxr_gaze);
         ImGui::TextWrapped("For hosts without OpenXR input only. After 90 frames, lets the layer attach gaze actions. A host that initializes input later cannot attach its own actions until restart.");
         ImGui::TreePop();
@@ -1708,14 +1703,20 @@ void draw_settings_overlay(reshade::api::effect_runtime*) {
 
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Stereo / Gaze")) {
-        bool calibration_enabled = eye_calibration_enabled();
-        if (ImGui::Checkbox("Automatic eye calibration (this session)", &calibration_enabled))
-            eye_calibration_enable(calibration_enabled);
-        ImGui::BeginDisabled(!calibration_enabled);
-        int method = int(settings.eye_calibration_method);
-        if (ImGui::Combo("Calibration method", &method, "Auto\0Standard corners\0Timing tolerant corners\0Full crop search\0")) {
-            settings.eye_calibration_method = static_cast<EyeCalibrationMethod>(method); changed = true;
+        ImGui::SeparatorText("Stereo Eye Mapping");
+        int method = settings.manual_stereo_mapping ? 4 : int(settings.eye_calibration_method);
+        if (ImGui::Combo("Mapping method", &method, "Auto\0Standard corners\0Timing tolerant corners\0Full crop search\0Manual\0")) {
+            settings.manual_stereo_mapping = method == 4;
+            if (method != 4) settings.eye_calibration_method = static_cast<EyeCalibrationMethod>(method);
+            eye_calibration_enable(method != 4);
+            changed = true;
         }
+        ImGui::BeginDisabled(!settings.manual_stereo_mapping);
+        changed |= ImGui::Checkbox("First DLSS view is right eye", &settings.manual_stereo_right_first);
+        ImGui::EndDisabled();
+        if (settings.manual_stereo_mapping)
+            ImGui::TextWrapped("Manual assumes full-eye images with matching XR coordinates: no crop, flip or projection changes. Off means left eye first. Check both eyes and image edges with the red border.");
+        ImGui::BeginDisabled(settings.manual_stereo_mapping);
         ImGui::Text("Learned starting method: %s", settings.eye_calibration_learned_method ?
             eye_calibration_method_name(static_cast<EyeCalibrationMethod>(settings.eye_calibration_learned_method)) : "Not learned yet");
         if (settings.eye_calibration_learned_method == 2 && settings.eye_calibration_learned_sessions < 2)
@@ -2111,7 +2112,7 @@ extern "C" __declspec(dllexport) bool AddonInit(
         return false;
     }
     reshade::register_overlay(nullptr, &draw_settings_overlay);
-    eye_calibration_enable(true);
+    eye_calibration_enable(!current_settings().manual_stereo_mapping);
     reshade::register_event<reshade::addon_event::execute_command_list>(
         &on_execute_command_list
     );
