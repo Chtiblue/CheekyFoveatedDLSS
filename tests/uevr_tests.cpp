@@ -83,6 +83,10 @@ void wait_gpu(ID3D12Device* device, ID3D12CommandQueue* queue) {
 }
 void settings_tests(const std::filesystem::path& root) {
     Settings s; require(s.d3d12_lower_hook, "Lower hook is the default");
+    require(!s.manual_stereo_mapping && !s.manual_stereo_right_first && !s.independent_openxr_gaze,
+        "Gaze compatibility must be opt-in");
+    for (const auto key : {"ManualStereoMapping", "ManualStereoRightFirst", "IndependentOpenXRGaze"})
+        require(set_named_setting(s, key, "true"), "Parse gaze compatibility option");
     require(!s.fix_motion_blur, "Motion blur compatibility is opt-in");
     require(set_named_setting(s, "FixMotionBlur", "true") && s.fix_motion_blur, "Enable motion blur fix");
     require(!set_named_setting(s, "FixMotionBlur", "invalid"), "Reject malformed motion blur setting");
@@ -111,6 +115,12 @@ void settings_tests(const std::filesystem::path& root) {
     Settings r; require(read_settings_file(path, r, error), "Read settings");
     require(r.fix_motion_blur && r.center_preset == 10U && r.peripheral_dlaa_preset == 10U,
         "Preset J and motion blur fix survive settings roundtrip");
+    require(r.manual_stereo_mapping && r.manual_stereo_right_first && r.independent_openxr_gaze,
+        "Gaze opt-ins survive per-application settings roundtrip");
+    auto reset_gaze = r;
+    require(reset_settings_group(reset_gaze, "gaze") && !reset_gaze.manual_stereo_mapping &&
+        !reset_gaze.manual_stereo_right_first && !reset_gaze.independent_openxr_gaze,
+        "Gaze reset restores opt-outs");
     update_settings(r);
     require(current_settings().fix_motion_blur && current_settings().center_preset == 10U &&
         current_settings().peripheral_dlaa_preset == 10U, "Runtime accepts J and motion blur fix");
@@ -145,6 +155,8 @@ void settings_tests(const std::filesystem::path& root) {
     require(r.nr_style == 0U, "Legacy settings must restore Standard style");
     require(r.d3d12_lower_hook, "Legacy settings default to lower hook even over a higher-hook draft");
     require(!r.fix_motion_blur, "Legacy settings cannot inherit compatibility copies");
+    require(!r.manual_stereo_mapping && !r.manual_stereo_right_first && !r.independent_openxr_gaze,
+        "Files without gaze opt-ins cannot inherit previously enabled compatibility modes");
     require(serialize_settings(r).find("AfwDepthCoverage") == std::string::npos,
         "Retired depth setting is ignored when loading older files and omitted on save");
     require(!r.afw_manual_coverage && !r.afw_automatic_coverage && r.afw_warp_margin == .05F,

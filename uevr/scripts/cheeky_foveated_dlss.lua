@@ -290,6 +290,16 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             if draft.SimulationPattern == 2 or draft.SimulationPattern == 3 then check("Show next jump target", "ShowNextJumpTarget") end
             if draft.SimulationPattern == 4 then text("Moves for 4 s, loses tracking for 1 s, then recovers.") end
         end
+        if imgui.tree_node("Gaze compatibility (opt-in)") then
+            check("Manual full-eye stereo mapping", "ManualStereoMapping")
+            if draft.ManualStereoMapping then
+                check("First DLSS view is right eye", "ManualStereoRightFirst")
+                text("Off means left eye first. Requires full-eye images with matching XR coordinates; no crop, flip or projection changes. Check both eyes with the red border.")
+            end
+            check("Independent OpenXR gaze (restart application required)", "IndependentOpenXRGaze")
+            text("For hosts without OpenXR input only. Attaches gaze after 90 frames; later host input initialization cannot attach until restart.")
+            imgui.tree_pop()
+        end
         if imgui.tree_node("Advanced eye tracking") then
             slider("Gaze smoothing (ms)", "GazeSmoothingMs", 0, 100)
             slider("Hold gaze on signal loss (ms)", "GazeHoldMs", 0, 1000)

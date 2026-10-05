@@ -43,6 +43,10 @@ std::atomic<std::uint32_t> roundness_bits{};
 std::atomic<std::uint32_t> transition_bits{0x3D23D70AU};
 std::atomic<bool> alignment_border_enabled{false};
 std::atomic<std::uint32_t> center_mode{};
+std::atomic<bool> manual_stereo_mapping{false};
+std::atomic<bool> manual_stereo_right_first{false};
+std::atomic<bool> independent_openxr_gaze{false};
+
 std::atomic<std::uint32_t> simulation_pattern{};
 std::atomic<bool> show_next_jump_target{true};
 std::atomic<std::uint32_t> gaze_smoothing_ms_bits{0x41A00000U};
@@ -186,6 +190,9 @@ Settings configured_settings() noexcept {
     );
     settings.show_next_jump_target = show_next_jump_target.load(std::memory_order_acquire);
     settings.simulation_pattern = simulation_pattern.load(std::memory_order_acquire);
+    settings.manual_stereo_mapping = manual_stereo_mapping.load(std::memory_order_acquire);
+    settings.manual_stereo_right_first = manual_stereo_right_first.load(std::memory_order_acquire);
+    settings.independent_openxr_gaze = independent_openxr_gaze.load(std::memory_order_acquire);
     settings.gaze_smoothing_ms = load_float(gaze_smoothing_ms_bits);
     settings.gaze_hold_ms = load_float(gaze_hold_ms_bits);
     settings.gaze_quantization_pixels = gaze_quantization_pixels.load(
@@ -304,6 +311,9 @@ void update_settings(const Settings& settings) noexcept {
             : 0U,
         std::memory_order_release
     );
+    manual_stereo_mapping.store(settings.manual_stereo_mapping, std::memory_order_release);
+    manual_stereo_right_first.store(settings.manual_stereo_right_first, std::memory_order_release);
+    independent_openxr_gaze.store(settings.independent_openxr_gaze, std::memory_order_release);
     show_next_jump_target.store(settings.show_next_jump_target, std::memory_order_release);
     simulation_pattern.store(std::min(settings.simulation_pattern, 5U), std::memory_order_release);
     store_float(

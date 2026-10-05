@@ -1084,6 +1084,66 @@ void test_nr_only_center(bool openvr) {
     clear_stereo_calibration(); reset_gaze_foveation();
 }
 
+void test_manual_stereo_mapping() {
+    using namespace cheeky::foveated_dlss;
+    clear_stereo_calibration(); reset_gaze_foveation();
+    register_stereo_view(5201); register_stereo_view(5202);
+    Settings s{}; s.center_mode = FoveationCenterMode::openxr_gaze;
+    s.width = s.height = .3F; s.gaze_smoothing_ms = 0; s.gaze_quantization_pixels = 1;
+    CheekyGazeSnapshotV1 snapshot{};
+    snapshot.abi_version = CHEEKY_GAZE_ABI_VERSION; snapshot.structure_size = sizeof(snapshot);
+    snapshot.session_generation = 52; snapshot.swapchain_generation = 1; snapshot.view_count = 2;
+    snapshot.status_flags = CHEEKY_GAZE_STATUS_MAPPING_READY | CHEEKY_GAZE_STATUS_SESSION_FOCUSED |
+        CHEEKY_GAZE_STATUS_GAZE_VALID;
+    for (unsigned eye = 0; eye < 2; ++eye) {
+        auto& v = snapshot.views[eye]; v.view_index = eye;
+        v.flags = CHEEKY_GAZE_VIEW_RESOURCE_VALID | CHEEKY_GAZE_VIEW_FORWARD_VALID |
+            CHEEKY_GAZE_VIEW_ORIENTATION_VALID;
+        v.resource_identity = 500 + eye; v.swapchain_identity = 600 + eye;
+        v.image_rect_width = 2400; v.image_rect_height = 2000;
+        v.center_u = eye ? .35F : .65F; v.center_v = .5F;
+        v.forward_u = eye ? .45F : .55F; v.forward_v = .5F;
+    }
+    FoveationCenter centers[2]{};
+    auto frame = [&] {
+        LARGE_INTEGER now{}; QueryPerformanceCounter(&now); snapshot.publication_qpc = now.QuadPart;
+        ++snapshot.predicted_display_time;
+        for (unsigned eye = 0; eye < 2; ++eye) {
+            bool reset{};
+            expect(calculate_coordinated_center(s, 5201 + eye, nullptr, 1200, 1000, 2400, 2000,
+                0, 0, centers[eye], reset, &snapshot), "Manual mapping coordinator evaluates");
+        }
+    };
+    frame(); frame(); frame();
+    expect(!gaze_diagnostics().using_gaze, "Matching dimensions alone must not enable gaze by default");
+    s.manual_stereo_mapping = true; frame(); frame(); frame();
+    expect(gaze_diagnostics().using_gaze && gaze_diagnostics().views[0].layout_mapping,
+        "Explicit manual mapping activates the diagnosed fallback");
+    expect_near(centers[0].u, .65F, .002F, "Left-first manual mapping uses left gaze");
+    s.manual_stereo_right_first = true; frame(); frame(); frame();
+    expect_near(centers[0].u, .35F, .002F, "Right-first manual mapping swaps gaze");
+    expect_near(centers[1].u, .65F, .002F, "Right-first maps the other eye independently");
+    ++snapshot.session_generation; frame();
+    expect(!gaze_diagnostics().using_gaze, "New session must reacquire manual mapping");
+    frame(); frame();
+    snapshot.status_flags |= CHEEKY_GAZE_STATUS_LIBOVR; frame();
+    expect(!gaze_diagnostics().using_gaze, "Backend change must reacquire manual mapping");
+    frame(); frame();
+    s.manual_stereo_mapping = false; frame();
+    expect(!gaze_diagnostics().using_gaze, "Disabling manual mapping discards held gaze immediately");
+    s.manual_stereo_mapping = true; snapshot.views[1].swapchain_identity = 0; frame(); frame();
+    expect(!gaze_diagnostics().using_gaze, "Missing swapchain identity cannot establish manual mapping");
+    snapshot.views[1].swapchain_identity = 601;
+    const std::array<StereoSourceCrop, 2> crops{{{0,0,1,1,2400,2000,true},{0,0,1,1,2400,2000,true}}};
+    expect(publish_stereo_calibration(5201, 5202, stereo_view_generation(5201), stereo_view_generation(5202),
+        5200, GetTickCount64(), nullptr, snapshot.session_generation - 1, false, false, &crops),
+        "Foreign session proof fixture publishes");
+    frame(); frame(); frame();
+    expect(!gaze_diagnostics().using_gaze, "Manual opt-in cannot reuse foreign-session calibration");
+    unregister_stereo_view(5201); unregister_stereo_view(5202);
+    clear_stereo_calibration(); reset_gaze_foveation();
+}
+
 void test_packed_alignment_coordinator(bool openvr = false) {
     using namespace cheeky::foveated_dlss;
     reset_gaze_foveation();
@@ -2685,6 +2745,18 @@ int run_vulkan_tests(bool real=false, bool integration=false);
 int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
 int main(int argc, char** argv) {
+    if (argc == 2 && (std::strcmp(argv[1], "--openxr-independent-on") == 0 ||
+        std::strcmp(argv[1], "--openxr-independent-off") == 0)) {
+        extern int run_openxr_independent_option_tests(bool);
+        return run_openxr_independent_option_tests(std::strcmp(argv[1], "--openxr-independent-on") == 0);
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--manual-gaze") == 0) {
+        test_manual_stereo_mapping();
+        test_packed_alignment_coordinator(false); test_packed_alignment_coordinator(true);
+        test_libovr_coordinator(); test_mono_gaze_coordinator();
+        return failures ? 1 : 0;
+    }
+
     if (argc == 2 && std::strcmp(argv[1], "--transport-geometry") == 0) {
         test_transport_guide_capacity();
         return failures ? 1 : 0;
@@ -2769,6 +2841,7 @@ int main(int argc, char** argv) {
         failures += run_motion_resample_tests();
         return failures ? 1 : 0;
     }
+    test_manual_stereo_mapping();
     test_center_supersampling();
     test_nr_only_center(false);
     test_nr_only_center(true);

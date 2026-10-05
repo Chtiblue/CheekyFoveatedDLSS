@@ -46,6 +46,9 @@ struct ViewState {
     bool has_crop{};
     bool calibrated_vertical_flip{};
     bool shared_source{};
+    bool manual_mapping{}, manual_right_first{};
+    std::uint64_t mapping_session{};
+    std::uint32_t mapping_backend{};
     std::array<StereoSourceCrop, 2> source_crops{};
     bool next_jump_visible{};
     FoveationOffsets next_jump_offsets{};
@@ -460,6 +463,9 @@ bool calculate_coordinated_crop(
             GetProcAddress(module, "CheekyOpenXR_SetSimulatedGaze"));
         const auto set_pattern = reinterpret_cast<SetSimulationFn>(
             GetProcAddress(module, "CheekyOpenXR_SetSimulationPattern"));
+        const auto set_independent = reinterpret_cast<SetSimulationFn>(
+            GetProcAddress(module, "CheekyOpenXR_SetIndependentGaze"));
+        if (set_independent) set_independent(settings.independent_openxr_gaze ? 1U : 0U);
         if (set_pattern != nullptr) set_pattern(settings.simulation_pattern);
         if (set_simulation != nullptr) {
             set_simulation(settings.center_mode == FoveationCenterMode::simulated_gaze ? 1U : 0U);
@@ -554,7 +560,7 @@ bool calculate_coordinated_crop(
                     state.last_crop.input_width, state.last_crop.input_height, state.has_crop},
                 {crop.input_base_x, crop.input_base_y, crop.input_width, crop.input_height, true},
                 false, false, remapped, settings.gaze_jump_reset_ratio);
-            reset_history = decision.reason != GazeResetReason::none;
+            reset_history |= decision.reason != GazeResetReason::none;
             if (reset_history) {
                 diagnostics.last_reset_reason = decision.reason;
                 trace_event("VR alignment history reset view=%llu reason=%u",
@@ -732,16 +738,18 @@ bool calculate_coordinated_crop(
             packed_stereo_match = true;
         }
     }
-    // Two independent eye swapchains, each describing the complete output. An
-    // OpenVR/LibOVR bridge such as the Virtual Desktop runtime submits this way,
-    // and the XR image is never the resource DLSS evaluates, so identity and
-    // copy routes cannot resolve. A verified stereo role plus matching output
-    // extents on both eyes identifies the layout without any shared identity.
-    if (match_count == 0U && eye_assignment.assigned && snapshot.view_count == 2U) {
+    // Explicit manual fallback: dimensions cannot prove eye identity or UV geometry.
+    // Never reuse calibrated roles after their session/backend proof was rejected.
+    if (settings.manual_stereo_mapping && match_count == 0U &&
+        eye_assignment.assigned && !eye_assignment.calibrated && snapshot.view_count == 2U &&
+        snapshot.session_generation != 0 &&
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_MAPPING_READY) != 0U &&
+        (snapshot.status_flags & (CHEEKY_GAZE_STATUS_UNSUPPORTED_VIEW_CONFIG |
+            CHEEKY_GAZE_STATUS_AMBIGUOUS_RESOURCE)) == 0U) {
         std::uint32_t layout_views{};
         for (std::uint32_t index{}; index < 2U; ++index) {
             const auto& view = snapshot.views[index];
-            if ((view.flags & CHEEKY_GAZE_VIEW_RESOURCE_VALID) == 0U) continue;
+            if ((view.flags & CHEEKY_GAZE_VIEW_RESOURCE_VALID) == 0U || !view.resource_identity) continue;
             if (view.array_index != 0U) continue;
             if (view.image_rect_x != static_cast<std::int32_t>(output_origin_x) ||
                 view.image_rect_y != static_cast<std::int32_t>(output_origin_y) ||
@@ -752,11 +760,10 @@ bool calculate_coordinated_crop(
         if (layout_views == 2U) {
             const bool distinct_swapchains =
                 snapshot.views[0].swapchain_identity != snapshot.views[1].swapchain_identity;
-            const bool undisclosed_swapchains =
-                snapshot.views[0].swapchain_identity == 0U ||
-                snapshot.views[1].swapchain_identity == 0U;
-            if (distinct_swapchains || undisclosed_swapchains) {
-                matched_index = eye_assignment.eye_index;
+            if (distinct_swapchains && snapshot.views[0].swapchain_identity &&
+                snapshot.views[1].swapchain_identity &&
+                snapshot.views[0].resource_identity != snapshot.views[1].resource_identity) {
+                matched_index = eye_assignment.eye_index ^ (settings.manual_stereo_right_first ? 1U : 0U);
                 match_count = 1U;
                 layout_stereo_match = true;
             }
@@ -765,6 +772,19 @@ bool calculate_coordinated_crop(
     diagnostics.mapping_ambiguous = diagnostics.mapping_ambiguous ||
         match_count > 1U;
     auto& state = state_for_view(view_id);
+    const auto mapping_backend = snapshot.status_flags & (CHEEKY_GAZE_STATUS_OPENVR | CHEEKY_GAZE_STATUS_LIBOVR);
+    const bool manual_policy_changed = state.manual_mapping != settings.manual_stereo_mapping ||
+        state.manual_right_first != settings.manual_stereo_right_first;
+    if (manual_policy_changed || state.mapping_session != snapshot.session_generation ||
+        state.mapping_backend != mapping_backend) {
+        state.mapping = {};
+        state.temporal = {};
+        state.manual_mapping = settings.manual_stereo_mapping;
+        state.manual_right_first = settings.manual_stereo_right_first;
+        state.mapping_session = snapshot.session_generation;
+        state.mapping_backend = mapping_backend;
+        reset_history = state.has_crop;
+    }
     const auto current_crops = marker_match ? eye_assignment.source_crops : std::array<StereoSourceCrop, 2>{};
     const bool calibration_changed = state.calibrated_vertical_flip != (marker_match && eye_assignment.vertical_flip) ||
         state.shared_source != shared_source || state.source_crops != current_crops;
@@ -858,7 +878,7 @@ bool calculate_coordinated_crop(
             "VR gaze mapping established view=%llu eye=%u route=%s",
             static_cast<unsigned long long>(view_id),
             state.mapping.view_index,
-            marker_match ? "pixel-marker" : projection_match ? "camera-projection" : copy_match ? "submitted-copy" : packed_stereo_match ? "packed-stereo" : layout_stereo_match ? "stereo-layout" : "exact-resource"
+            marker_match ? "pixel-marker" : projection_match ? "camera-projection" : copy_match ? "submitted-copy" : packed_stereo_match ? "packed-stereo" : layout_stereo_match ? "manual-stereo-layout" : "exact-resource"
         );
     }
 
@@ -1009,7 +1029,7 @@ bool calculate_coordinated_crop(
         mapping_result.changed,
         settings.gaze_jump_reset_ratio
     );
-    reset_history = reset_result.reason != GazeResetReason::none;
+    reset_history |= reset_result.reason != GazeResetReason::none;
     if (reset_history) {
         diagnostics.last_reset_reason = reset_result.reason;
         trace_event(

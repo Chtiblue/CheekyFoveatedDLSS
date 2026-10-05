@@ -719,7 +719,7 @@ void draw_openxr_gaze_diagnostics() {
                 label, "DLSS view 0x%llX (%u matches, %s)",
                 static_cast<unsigned long long>(view.dlss_view_id),
                 view.stable_matches,
-                view.marker_mapping ? "pixel marker" : view.projection_mapping ? "projection" : view.copy_mapping ? "copy" : view.packed_stereo_mapping ? "packed" : view.layout_mapping ? "stereo layout" : "exact"
+                view.marker_mapping ? "pixel marker" : view.projection_mapping ? "projection" : view.copy_mapping ? "copy" : view.packed_stereo_mapping ? "packed" : view.layout_mapping ? "manual stereo layout" : "exact"
             );
         } else {
             diagnostic_row(label, "Waiting (%u matches)", view.stable_matches);
@@ -839,6 +839,9 @@ void load_settings_from_reshade() noexcept {
         nullptr, config_section, "ShowNextJumpTarget", settings.show_next_jump_target));
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "SimulationPattern", settings.simulation_pattern));
+    reshade::get_config_value(nullptr, config_section, "ManualStereoMapping", settings.manual_stereo_mapping);
+    reshade::get_config_value(nullptr, config_section, "ManualStereoRightFirst", settings.manual_stereo_right_first);
+    reshade::get_config_value(nullptr, config_section, "IndependentOpenXRGaze", settings.independent_openxr_gaze);
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "GazeSmoothingMs",
         settings.gaze_smoothing_ms
@@ -1018,6 +1021,9 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
         nullptr, config_section, "ShowNextJumpTarget", settings.show_next_jump_target);
     reshade::set_config_value(
         nullptr, config_section, "SimulationPattern", settings.simulation_pattern);
+    reshade::set_config_value(nullptr, config_section, "ManualStereoMapping", settings.manual_stereo_mapping);
+    reshade::set_config_value(nullptr, config_section, "ManualStereoRightFirst", settings.manual_stereo_right_first);
+    reshade::set_config_value(nullptr, config_section, "IndependentOpenXRGaze", settings.independent_openxr_gaze);
     reshade::set_config_value(
         nullptr, config_section, "GazeSmoothingMs",
         settings.gaze_smoothing_ms
@@ -1349,6 +1355,16 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         "Show 5 px red alignment border",
         &settings.alignment_border_enabled
     );
+    if (ImGui::TreeNode("Gaze compatibility (opt-in)")) {
+        changed |= ImGui::Checkbox("Manual full-eye stereo mapping", &settings.manual_stereo_mapping);
+        if (settings.manual_stereo_mapping) {
+            changed |= ImGui::Checkbox("First DLSS view is right eye", &settings.manual_stereo_right_first);
+            ImGui::TextWrapped("Off means left eye first. Assumes two full-eye images with identical XR coordinates: no crop, flip or projection changes. Use the red alignment border to check both eyes, including the edges.");
+        }
+        changed |= ImGui::Checkbox("Independent OpenXR gaze (restart application required)", &settings.independent_openxr_gaze);
+        ImGui::TextWrapped("For hosts without OpenXR input only. After 90 frames, lets the layer attach gaze actions. A host that initializes input later cannot attach its own actions until restart.");
+        ImGui::TreePop();
+    }
     if ((settings.center_mode == FoveationCenterMode::openxr_gaze ||
          settings.center_mode == FoveationCenterMode::simulated_gaze) &&
         ImGui::TreeNode("Advanced eye tracking")) {
@@ -1431,6 +1447,9 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         settings.aligned_height_offset = defaults.aligned_height_offset;
         settings.show_next_jump_target = defaults.show_next_jump_target;
         settings.simulation_pattern = defaults.simulation_pattern;
+        settings.manual_stereo_mapping = defaults.manual_stereo_mapping;
+        settings.manual_stereo_right_first = defaults.manual_stereo_right_first;
+        settings.independent_openxr_gaze = defaults.independent_openxr_gaze;
         settings.gaze_smoothing_ms = defaults.gaze_smoothing_ms;
         settings.gaze_hold_ms = defaults.gaze_hold_ms;
         settings.gaze_quantization_pixels =

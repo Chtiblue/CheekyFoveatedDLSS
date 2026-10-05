@@ -2,6 +2,31 @@
 
 Requires Visual Studio 2022 or newer with Desktop development with C++ and a Windows 10/11 SDK. Dependencies are vendored under [third_party](third_party/README.md).
 
+## Optional gaze compatibility
+
+The Stereo/gaze controls in standalone, UEVR and ReShade expose two independent,
+per-application options, both disabled by default:
+
+- `ManualStereoMapping`: permits the full-eye layout fallback when automatic
+  routes cannot map distinct eye resources. `ManualStereoRightFirst` selects
+  right-first instead of left-first DLSS evaluation order. This assumes matching
+  source/XR coordinates, with no crop, flip or projection change; dimensions alone
+  do not verify the assumption. Check the red alignment border in both eyes,
+  including the edges. Changes apply immediately. Foreign-session calibration
+  cannot supply an eye role, and session/backend changes reacquire mapping before
+  using gaze. Diagnostics call this manual stereo layout.
+- `IndependentOpenXRGaze`: permits gaze-only action attachment after 90 successful
+  frames when the host has not created, attached or synchronized action sets.
+  **Restart the application after changing this option.** The first setting sent
+  to the OpenXR layer is latched for its lifetime. The delay is only a grace period:
+  attachment is irreversible and a host initializing input later cannot attach.
+  Existing RealVR/IL-2 compatibility paths remain independent of this option.
+
+Post-attachment action-space creation is enabled generally for runtime
+compatibility. Run `CheekyTests --manual-gaze`, `--openxr-independent-on`,
+`--openxr-independent-off`, and `--openxr-input` for focused coverage. Each
+independent-input test runs in its own process to exercise the restart latch.
+
 ## Build
 
 From PowerShell at the repository root:

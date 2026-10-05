@@ -72,6 +72,7 @@ struct Runtime {
         FN("xrDestroySession", [](XrSession) { return XR_SUCCESS; });
         FN("xrBeginSession", [](XrSession, const XrSessionBeginInfo*) { return XR_SUCCESS; });
         FN("xrEndSession", [](XrSession) { return XR_SUCCESS; });
+        FN("xrEndFrame", [](XrSession, const XrFrameEndInfo*) { return XR_SUCCESS; });
         FN("xrBeginFrame", [](XrSession, const XrFrameBeginInfo*) { return XR_SUCCESS; });
         FN("xrGetSystemProperties", [](XrInstance, XrSystemId, XrSystemProperties* p) {
             auto* gaze = static_cast<XrSystemEyeGazeInteractionPropertiesEXT*>(p->next);
@@ -93,6 +94,7 @@ struct Runtime {
             return binding_result;
         });
         FN("xrCreateActionSpace", [](XrSession, const XrActionSpaceCreateInfo*, XrSpace* space) {
+            require(attached, "Compatibility action spaces must be created after attachment");
             if (XR_SUCCEEDED(space_result)) *space = handle<XrSpace>(40); return space_result;
         });
         FN("xrDestroySpace", [](XrSpace) { return XR_SUCCESS; });
@@ -382,6 +384,33 @@ int run_openxr_input_compatibility_tests(bool expected_il2) {
     }
 }
 
+int run_openxr_independent_option_tests(bool enabled) {
+    try {
+        Runtime::reset();
+        Layer layer;
+        const auto configure = reinterpret_cast<void(__cdecl*)(std::uint32_t)>(
+            GetProcAddress(layer.module, "CheekyOpenXR_SetIndependentGaze"));
+        require(configure != nullptr, "Missing independent gaze configuration export");
+        // First configuration wins; later edits require an application restart.
+        configure(enabled); configure(!enabled);
+        for (int frame = 1; frame <= 91; ++frame) {
+            const auto sample = layer.locate(frame);
+            if (frame <= 90) require(Runtime::attaches == 0, "Fallback attached before grace period");
+            if (frame == 91) require(valid(sample) == enabled, "Independent gaze opt-in not respected");
+            XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO};
+            info.displayTime = frame;
+            info.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+            require(layer.fn<PFN_xrEndFrame>("xrEndFrame")(layer.session, &info) == XR_SUCCESS, "Frame failed");
+        }
+        const auto host = layer.create_host_set();
+        require(layer.attach(host) == (enabled ? XR_ERROR_ACTIONSETS_ALREADY_ATTACHED : XR_SUCCESS),
+            "Default must preserve delayed host attachment; opted-in ownership is irreversible");
+        std::cout << "PASS: independent gaze opt-in, frame gate, restart latch and delayed host attachment\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << error.what() << '\n'; return 1;
+    }
+}
 int run_openxr_input_tests() {
     HMODULE realvr{};
     try {

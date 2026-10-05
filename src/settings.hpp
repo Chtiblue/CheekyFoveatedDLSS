@@ -84,6 +84,9 @@ struct Settings {
     bool next_jump_visible{};
     float next_jump_offset_x{}, next_jump_offset_y{};
     float next_jump_width{}, next_jump_height{};
+    bool manual_stereo_mapping{false};
+    bool manual_stereo_right_first{false};
+    bool independent_openxr_gaze{false};
     float gaze_smoothing_ms{20.0F};
     // Shorter gaze loss (a blink) keeps the last gaze without a DLSS history reset.
     float gaze_hold_ms{400.0F};

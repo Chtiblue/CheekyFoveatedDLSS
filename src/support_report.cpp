@@ -111,6 +111,9 @@ std::string settings_text(const Settings& s) {
     out << "center_mode=" << static_cast<unsigned>(s.center_mode) << '\n';
     out << "simulation_pattern=" << s.simulation_pattern << '\n';
     out << "show_next_jump_target=" << s.show_next_jump_target << '\n';
+    out << "manual_stereo_mapping=" << s.manual_stereo_mapping << '\n';
+    out << "manual_stereo_right_first=" << s.manual_stereo_right_first << '\n';
+    out << "independent_openxr_gaze=" << s.independent_openxr_gaze << '\n';
     out << "gaze_smoothing_ms=" << s.gaze_smoothing_ms << '\n';
     out << "gaze_hold_ms=" << s.gaze_hold_ms << '\n';
     out << "gaze_quantization_pixels=" << s.gaze_quantization_pixels << '\n';

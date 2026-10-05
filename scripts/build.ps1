@@ -74,6 +74,10 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
+foreach ($gazeMode in @('--manual-gaze', '--openxr-independent-on', '--openxr-independent-off')) {
+    & $testExecutable $gazeMode
+    if ($LASTEXITCODE -ne 0) { throw "Gaze compatibility regression failed: $gazeMode" }
+}
 & (Join-Path $projectRoot "bin\$Configuration\CheekyOpenXRBindingTests.exe")
 if ($LASTEXITCODE -ne 0) { throw "OpenXR binding and pointer regressions failed." }
 & $testExecutable --calibration-search

@@ -202,6 +202,16 @@ void draw_gaze(Settings& s) {
         ImGui::TextWrapped("For packed layouts with reversed eye order; normally leave off.");
         ImGui::TreePop();
     }
+    if (ImGui::TreeNode("Gaze compatibility (opt-in)")) {
+        ImGui::Checkbox("Manual full-eye stereo mapping", &s.manual_stereo_mapping);
+        if (s.manual_stereo_mapping) {
+            ImGui::Checkbox("First DLSS view is right eye", &s.manual_stereo_right_first);
+            ImGui::TextWrapped("Off means left eye first. Assumes two full-eye images with identical XR coordinates: no crop, flip or projection changes. Use the red alignment border to check both eyes, including the edges.");
+        }
+        ImGui::Checkbox("Independent OpenXR gaze (restart application required)", &s.independent_openxr_gaze);
+        ImGui::TextWrapped("For hosts without OpenXR input only. After 90 frames, lets the layer attach gaze actions. A host that initializes input later cannot attach its own actions until restart.");
+        ImGui::TreePop();
+    }
     if (s.center_mode == FoveationCenterMode::simulated_gaze) {
         combo("Simulation pattern", s.simulation_pattern, "Figure eight (8 s)\0Slow sweep (20 s)\0Jump every 2 s\0Jump every 8 s\0Tracking loss\0Hold center\0");
         if (s.simulation_pattern == 2 || s.simulation_pattern == 3)
@@ -405,6 +415,7 @@ void draw_gaze_details(std::string_view snapshot) {
             const auto eye = array_object(member(gaze, "eyes"), i);
             ImGui::SeparatorText(i ? "Right eye" : "Left eye");
             diagnostic_line(eye, "Mapped", "mapped");
+            if (flag(eye, "layout")) ImGui::TextUnformatted("Mapping: Manual stereo layout (unverified)");
             diagnostic_line(eye, "DLSS view", "view_id");
             diagnostic_line(eye, "Stable matches", "stable_matches");
             ImGui::TextWrapped("Alignment: %s", alignment_name(static_cast<unsigned>(number(eye, "alignment"))));
