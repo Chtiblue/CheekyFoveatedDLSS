@@ -8,47 +8,46 @@ local error_text = nil
 local last_snapshot_frame = 0
 local ready_edits, slider_edits = {}, {}
 
+local load_event = "cheeky.foveated_dlss.load.v1"
+local load_state_event = "cheeky.foveated_dlss.load_state.v1"
 local config_filename = "cheeky.txt"
-local disableMod = nil
+local loader_state, loader_error = nil, nil
+local enabled = false
+local ok, config = pcall(fs.read, config_filename)
+if ok and type(config) == "string" then
+    -- Only an explicit valid opt-in enables loading. Malformed values stay off.
+    enabled = config:match("^%s*disableMod%s*=%s*([01])%s*$") == "0"
+end
 
-local function check_enable()
-    if disableMod == 1 then 
-        print("dispatching disable command")
-        uevr.api:dispatch_custom_event("load", "false")
-    else
-        print("dispatching enable command")
-        uevr.api:dispatch_custom_event("load", "true")
+local function request_load()
+    uevr.api:dispatch_custom_event(load_event, enabled and "true" or "false")
+end
+
+local function clear_runtime_ui()
+    status, draft, dirty = nil, {}, {}
+    ready_edits, slider_edits, pending_apply = {}, {}, nil
+    error_text = nil
+end
+
+local function set_enabled(value)
+    local contents = value and "disableMod=0\n" or "disableMod=1\n"
+    local written = pcall(fs.write, config_filename, contents)
+    local read_ok, saved = pcall(fs.read, config_filename)
+    if not written or not read_ok or saved ~= contents then
+        loader_error = "Could not save this game's Cheeky enable setting. Check the UEVR profile directory."
+        if not value then
+            -- Always allow stopping this session, even on a read-only profile.
+            enabled, loader_state = false, nil
+            clear_runtime_ui()
+            request_load()
+            loader_error = loader_error .. " Disabled for this session only."
+        end
+        return
     end
+    enabled, loader_state, loader_error = value, nil, nil
+    clear_runtime_ui()
+    request_load()
 end
-
-local function get_mod_enabled_from_config()
-	local read_val = 1
-    local config_data = fs.read(config_filename)
-    if config_data then
-        for key, value in config_data:gmatch("([^=]+)=([^\n]+)\n?") do
-            local num_val = tonumber(value)
-			if key == "disableMod" then read_val = num_val end
-		end
-	end
-	return read_val
-end
-
-local function write_config()
-    local config = "" -- Initialize config as an empty string
-    if disableMod == nil then  return end
-    
-    ---------------------------------------------------
-    -- Group 1: Integer (or Boolean-like) values
-    ---------------------------------------------------
-    local valid = false
-	local var = 0
-	
-	config = config .. string.format("disableMod=%d\n", disableMod)
-    fs.write(config_filename, config)
-end
-
-disableMod = get_mod_enabled_from_config()
-check_enable() 
 
 local function send(action, changes)
     request = request + 1
@@ -71,7 +70,13 @@ local function flush_edits()
 end
 
 uevr.sdk.callbacks.on_lua_event(function(event, text)
-    if event ~= snapshot_event then return end
+    if event == load_state_event then
+        if text ~= "enabled" and text ~= "disabled" and text ~= "failed" then return end
+        loader_state = text
+        if text == "disabled" then clear_runtime_ui() end
+        return
+    end
+    if event ~= snapshot_event or not enabled then return end
     local ok, value = pcall(json.load_string, text)
     if not ok or type(value) ~= "table" or value.protocol ~= protocol or type(value.settings) ~= "table" then
         error_text = "Cheeky UI/runtime version mismatch or invalid response. Install the matching files."
@@ -108,6 +113,10 @@ end)
 
 uevr.sdk.callbacks.on_frame(function()
     frame = frame + 1
+    -- Retry/acknowledge the desired state even if Lua started before the plugin,
+    -- or the thin adapter was reloaded. Duplicate requests do not reload it.
+    if frame % 120 == 1 then request_load() end
+    if not enabled or loader_state ~= "enabled" then return end
     if status and frame - last_snapshot_frame > 600 then
         status, pending_apply = nil, nil
     end
@@ -278,18 +287,21 @@ local function afw_controls()
 end
 
 uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
-    local changed, value = imgui.checkbox("Disable Cheeky", disableMod == 1)
-    if changed == true then
-        if value == true then 
-            disableMod = 1
-        else
-            disableMod = 0
-        end
-        write_config()
-        check_enable()
+    local changed, value = imgui.checkbox("Enable Cheeky for this game", enabled)
+    if changed then set_enabled(value) end
+    if loader_error then text(loader_error) end
+    if not enabled then
+        text("Disabled. After first activation, hook code stays resident until application exit; processing is detached.")
+        return
     end
-    if disableMod == 1 then return end
-     
+    if loader_state == "failed" then
+        text("Cheeky could not start. Check the runtime message below and the log; missing files require the complete matching package.")
+        if not status then return end
+    elseif loader_state ~= "enabled" then
+        text("Waiting for the Cheeky plugin. Install the matching plugin and Lua script.")
+        return
+    end
+
     if not imgui.tree_node("Cheeky Foveated DLSS") then return end
     if error_text then text(error_text) end
     if not status then

@@ -96,6 +96,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $uevrTest = Join-Path $projectRoot "bin\$Configuration\CheekyUEVRTests.exe"
+foreach ($loaderMode in @('--loader-lifecycle', '--loader-missing')) {
+    & $uevrTest $loaderMode
+    if ($LASTEXITCODE -ne 0) { throw "UEVR loader regression failed: $loaderMode" }
+}
 & $uevrTest
 if ($LASTEXITCODE -ne 0) { throw "UEVR host tests failed with exit code $LASTEXITCODE." }
 & $uevrTest --conflict

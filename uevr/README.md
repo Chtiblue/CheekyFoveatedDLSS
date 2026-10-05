@@ -18,7 +18,19 @@ scripts/
 ```
 
 4. **For OpenXR gaze, or ordinary stereo alignment/calibration, run the matching `OpenXR/CheekyOpenXRSetup.exe` included in the UEVR ZIP before starting the game.** AFW fixed/automatic coverage needs no OpenXR layer. Native OpenVR uses the built-in adapter, including when its compositor initialized before the plugin.
-5. Start the game with DLSS enabled, inject UEVR and open **LuaLoader → Cheeky Foveated DLSS**.
+5. Start the game with DLSS enabled, inject UEVR and open **LuaLoader → Cheeky Foveated DLSS**. Check **Enable Cheeky for this game**. New profiles start disabled; the enable choice is saved per game.
+
+For a global installation, extract the same `plugins/` and `scripts/` directories
+under `%APPDATA%\UnrealVRMod\UEVR`. Avoid also installing a second copy in the
+game's profile. The thin adapter stays dormant until enabled for that game, then
+loads the processing runtime. The Lua enable choice is stored in `cheeky.txt`
+under that game's UEVR Lua data directory.
+
+Unchecking **Enable Cheeky for this game** detaches processing on the next host
+frame. The hooked runtime remains resident until the application exits; restart
+the application to remove it from memory. Re-enabling reconnects without a
+restart and preserves processing settings. Replace the Lua script and DLLs
+together when updating.
 
 The OpenXR installation is shared across games. Install all plugin files and the layer from the same release when updating.
 

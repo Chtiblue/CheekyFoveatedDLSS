@@ -29,6 +29,14 @@ independent-input test runs in its own process to exercise the restart latch.
 
 ## Build
 
+UEVR deferred-loading coverage: `CheekyUEVRTests --loader-lifecycle` and
+`--loader-missing` exercise dormancy, event isolation, deferred transitions,
+disable/re-enable, concurrent requests, missing exports and package repair.
+`lua tests/uevr_loader_tests.lua` exercises the actual Lua panel with a mocked
+UEVR API, including malformed profiles, persistence errors, startup ordering
+and disabled-state command suppression. CMake registers this test when Lua is
+available, or when `CHEEKY_LUA_EXECUTABLE` names a Lua 5.4+ interpreter.
+
 From PowerShell at the repository root:
 
 ```powershell

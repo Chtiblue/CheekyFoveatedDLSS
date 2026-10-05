@@ -28,7 +28,8 @@ namespace {
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 void check(HRESULT hr, const char* why) { require(SUCCEEDED(hr), why); }
 std::wstring directory;
-std::string received;
+std::string received, loader_received;
+unsigned present_registrations{}, reset_registrations{}, custom_registrations{};
 UEVR_OnPresentCb present{};
 UEVR_OnDeviceResetCb reset{};
 UEVR_OnCustomEventCb custom{};
@@ -48,9 +49,9 @@ void get_projection(UEVR_Eye eye, UEVR_Matrix4x4f* out) {
 }
 bool is_openvr() { return openvr_active; }
 UEVR_IVRCompositor get_compositor() { return reinterpret_cast<UEVR_IVRCompositor>(cached_compositor); }
-bool add_present(UEVR_OnPresentCb f) { present = f; return true; }
-bool add_reset(UEVR_OnDeviceResetCb f) { reset = f; return true; }
-bool add_custom(UEVR_OnCustomEventCb f) { custom = f; return true; }
+bool add_present(UEVR_OnPresentCb f) { ++present_registrations; present = f; return true; }
+bool add_reset(UEVR_OnDeviceResetCb f) { ++reset_registrations; reset = f; return true; }
+bool add_custom(UEVR_OnCustomEventCb f) { ++custom_registrations; custom = f; return true; }
 bool remove_callback(void* f) {
     if (f == reinterpret_cast<void*>(present)) present = nullptr;
     if (f == reinterpret_cast<void*>(reset)) reset = nullptr;
@@ -63,6 +64,7 @@ unsigned get_dir(wchar_t* out, unsigned capacity) {
 }
 void dispatch(const char* event, const char* data) {
     if (std::string(event) == "cheeky.foveated_dlss.snapshot.v1") received = data;
+    if (std::string(event) == "cheeky.foveated_dlss.load_state.v1") loader_received = data;
 }
 void log(const char* format, ...) { va_list args; va_start(args, format); vprintf(format, args); va_end(args); puts(""); }
 double field(const std::string& json, const std::string& name) {
@@ -314,6 +316,12 @@ int main(int argc, char** argv) {
             Settings initial; initial.d3d12_lower_hook = false; std::string error;
             require(write_settings_file(root / "CheekyFoveatedDLSS.ini", initial, error), "Save higher-hook startup setting");
         }
+        if (mode == "--loader-missing") {
+            const auto isolated = root / "missing-runtime";
+            std::filesystem::create_directories(isolated);
+            std::filesystem::copy_file(plugin_path, isolated / plugin_path.filename());
+            plugin_path = isolated / plugin_path.filename();
+        }
         HMODULE plugin = LoadLibraryW(plugin_path.c_str()); require(plugin != nullptr, "Load actual UEVR plugin DLL");
         auto init = reinterpret_cast<UEVR_PluginInitializeFn>(GetProcAddress(plugin, "uevr_plugin_initialize"));
         require(init != nullptr, "Plugin entry export");
@@ -322,9 +330,67 @@ int main(int argc, char** argv) {
         require(init(&api), "Initialize real plugin via fake UEVR callbacks");
         require(init(&api), "Repeated host init is idempotent");
         require(present && custom && reset, "All callbacks registered");
+        require(present_registrations == 1 && reset_registrations == 1 && custom_registrations == 1,
+            "Repeated initialization must not register duplicate callbacks");
+        present(); reset();
+        require(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == nullptr && loader_received == "disabled",
+            "Plugin stays dormant without loading runtime");
+        custom("load", "true"); custom("cheeky.foveated_dlss.load.v1", "invalid"); present();
+        require(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == nullptr,
+            "Foreign and malformed events must not load Cheeky");
+        custom("cheeky.foveated_dlss.load.v1", "true");
+        require(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == nullptr,
+            "Custom callback must defer loading to present");
+        present();
+        if (mode == "--loader-missing") {
+            require(loader_received == "failed" && GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == nullptr,
+                "Missing runtime reports failure without leaving pointers active");
+            reset(); present();
+            const auto destination = plugin_path.parent_path() / "CheekyFoveatedDLSS" / "CheekyFoveatedDLSSRuntime.dll";
+            std::filesystem::create_directories(destination.parent_path());
+            std::filesystem::copy_file(bin / "test-fixtures" / "nvngx_dlss.dll", destination);
+            custom("cheeky.foveated_dlss.load.v1", "false"); present();
+            custom("cheeky.foveated_dlss.load.v1", "true"); present(); reset();
+            require(loader_received == "failed" && GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == nullptr,
+                "Incomplete runtime exports leave no dangling callbacks");
+            std::filesystem::copy_file(bin / "CheekyFoveatedDLSS" / "CheekyFoveatedDLSSRuntime.dll",
+                destination, std::filesystem::copy_options::overwrite_existing);
+            custom("cheeky.foveated_dlss.load.v1", "false"); present();
+            custom("cheeky.foveated_dlss.load.v1", "true"); present();
+            require(loader_received == "enabled", "Explicit retry can recover after package repair");
+        }
         const auto runtime = GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll"); require(runtime != nullptr, "Runtime dependency loaded");
         auto get = reinterpret_cast<CheekyUEVRSnapshotFn>(GetProcAddress(runtime, "CheekyUEVR_Snapshot"));
         auto start = reinterpret_cast<CheekyUEVRStartFn>(GetProcAddress(runtime, "CheekyUEVR_Start"));
+        if (mode == "--loader-lifecycle" || mode == "--loader-missing") {
+            const auto before = field(snapshot(get), "Width");
+            custom("cheeky.foveated_dlss.command.v1", "1\n999\nset\nWidth=0.777");
+            custom("cheeky.foveated_dlss.load.v1", "false");
+            require(snapshot(get).find("\"attached\":true") != std::string::npos,
+                "Event callback must defer detachment");
+            present();
+            require(loader_received == "disabled" && snapshot(get).find("\"processing\":false") != std::string::npos,
+                "Disable detaches processing");
+            require(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll") == runtime,
+                "Hook runtime stays resident after disable");
+            custom("cheeky.foveated_dlss.load.v1", "true"); present();
+            require(loader_received == "enabled" && field(snapshot(get), "Width") == before,
+                "Re-enable must discard commands from the old attachment");
+            auto stale_detach = reinterpret_cast<CheekyUEVRDetachFn>(GetProcAddress(runtime, "CheekyUEVR_Detach"));
+            custom("cheeky.foveated_dlss.load.v1", "true"); present();
+            stale_detach(1);
+            require(snapshot(get).find("\"attached\":true") != std::string::npos,
+                "Repeated enable is idempotent and stale detach cannot disable new attachment");
+            // Requests may arrive from a Lua/game thread while render/reset callbacks run.
+            std::thread events([] { for (int i = 0; i < 200; ++i)
+                custom("cheeky.foveated_dlss.load.v1", i % 2 ? "true" : "false"); });
+            for (int i = 0; i < 20; ++i) { present(); reset(); }
+            events.join();
+            custom("cheeky.foveated_dlss.load.v1", "false"); present();
+            require(loader_received == "disabled", "Final concurrent request is applied");
+            puts("PASS: deferred loader lifecycle, failure recovery and event isolation");
+            return 0;
+        }
         if (openvr_late) {
             auto attach = reinterpret_cast<CheekyUEVRAttachOpenVRFn>(GetProcAddress(runtime, "CheekyUEVR_AttachOpenVR"));
             require(attach && !attach(0, cached_compositor), "Reject unowned compositor attachment");
@@ -436,6 +502,8 @@ int main(int argc, char** argv) {
             plugin = LoadLibraryW(plugin_path.c_str()); require(plugin != nullptr, "Reload AFW adapter");
             init = reinterpret_cast<UEVR_PluginInitializeFn>(GetProcAddress(plugin, "uevr_plugin_initialize"));
             require(init(&api), "Reconnect AFW adapter");
+            custom("cheeky.foveated_dlss.load.v1", "true"); present();
+            hmd_active = false; present(); hmd_active = true;
             require(snapshot(get).find("\"projection_valid\":false") != std::string::npos,
                 "Reattachment does not inherit another adapter generation's projections");
             invalid.abi = 1;
@@ -570,7 +638,8 @@ int main(int argc, char** argv) {
         require(snapshot(get).find("\"status\":\"Disabled\"")!=std::string::npos,"Unload suspends calibration without loader-lock GPU work");
         plugin=LoadLibraryW(plugin_path.c_str()); require(plugin!=nullptr,"Reload plugin");
         init=reinterpret_cast<UEVR_PluginInitializeFn>(GetProcAddress(plugin,"uevr_plugin_initialize"));
-        require(init(&api),"Reconnect existing runtime"); command("1\n6\nget");
+        require(init(&api),"Reconnect existing runtime");
+        custom("cheeky.foveated_dlss.load.v1", "true"); present(); command("1\n6\nget");
         require(received.find("\"attached\":true")!=received.npos && std::abs(field(received,"Width")-0.65)<0.0001,"Reload retains settings");
         require(received.find("\"EyeCalibrationContinuous\":false") != received.npos,
             "Reconnect must retain the saved calibration policy");

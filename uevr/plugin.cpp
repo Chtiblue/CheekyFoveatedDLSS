@@ -21,6 +21,11 @@ CheekyUEVRCommandFn runtime_command{};
 CheekyUEVRSnapshotFn runtime_snapshot{};
 std::atomic<bool> initialized{};
 std::atomic<bool> should_load{};
+bool callbacks_registered{}, load_attempted{};
+std::atomic<bool> loader_status_requested{true};
+std::mutex lifecycle_mutex;
+constexpr char load_event[] = "cheeky.foveated_dlss.load.v1";
+constexpr char load_state_event[] = "cheeky.foveated_dlss.load_state.v1";
 std::uint64_t attachment{};
 std::atomic<void*> attached_compositor{};
 std::atomic<ULONGLONG> next_openvr_attach{};
@@ -31,25 +36,15 @@ constexpr char snapshot_event[] = "cheeky.foveated_dlss.snapshot.v1";
 
 // Forward declarations
 bool initialize_dll();
-void unload_dll();
+void detach_runtime();
 
 void on_custom_event(const char* event, const char* data) {
-    if (event && data) {
-        if (strcmp(event, "load") == 0) {
-            if (strcmp(data, "true") == 0) {
-                should_load = true;
-                if (!initialized) {
-                    initialize_dll();
-                }
-            } else if (strcmp(data, "false") == 0) {
-                should_load = false;
-                if (initialized) {
-                    unload_dll();
-                }
-            }
-        }
+    if (event && data && strcmp(event, load_event) == 0) {
+        if (strcmp(data, "true") != 0 && strcmp(data, "false") != 0) return;
+        should_load.store(strcmp(data, "true") == 0, std::memory_order_release);
+        loader_status_requested = true;
+        return; // Never load or detach from a Lua/custom-event callback.
     }
-    
     if (!initialized || !event || !data || strcmp(event, command_event) != 0 || strnlen_s(data, 8193) > 8192) return;
     try {
         std::lock_guard lock(commands_mutex);
@@ -57,16 +52,36 @@ void on_custom_event(const char* event, const char* data) {
     } catch (...) {}
 }
 
-void publish_snapshot() {
+std::string read_snapshot() {
     std::array<char, cheeky_uevr_message_capacity> text{};
-    if (runtime_snapshot && runtime_snapshot(text.data(), static_cast<std::uint32_t>(text.size()))) {
-        api->functions->dispatch_lua_event(snapshot_event, text.data());
-    }
+    if (runtime_snapshot && runtime_snapshot(text.data(), static_cast<std::uint32_t>(text.size())))
+        return text.data();
+    return {};
 }
 
 void on_present() {
-    if (!initialized || !api) return; 
+    if (!api) return;
     try {
+        std::vector<std::string> snapshots;
+        const char* loader_state{};
+        std::unique_lock lifecycle(lifecycle_mutex);
+        const bool requested = should_load.load(std::memory_order_acquire);
+        bool changed{};
+        if (!requested && (initialized || load_attempted)) {
+            detach_runtime(); load_attempted = false; changed = true;
+        } else if (requested && !initialized && !load_attempted) {
+            load_attempted = true; initialize_dll(); changed = true;
+        }
+        if (loader_status_requested.exchange(false) || changed)
+            loader_state = !requested ? "disabled" : initialized ? "enabled" : "failed";
+        if (!initialized) {
+            if (requested && loader_state) snapshots.push_back(read_snapshot());
+            lifecycle.unlock();
+            if (loader_state) api->functions->dispatch_lua_event(load_state_event, loader_state);
+            for (const auto& snapshot : snapshots)
+                if (!snapshot.empty()) api->functions->dispatch_lua_event(snapshot_event, snapshot.c_str());
+            return;
+        }
         if (api->vr && api->vr->is_openvr && api->vr->is_openvr() && api->openvr && api->openvr->get_vr_compositor) {
             auto* compositor = reinterpret_cast<void*>(api->openvr->get_vr_compositor());
             const auto now = GetTickCount64();
@@ -112,17 +127,24 @@ void on_present() {
         { std::lock_guard lock(commands_mutex); pending.swap(commands); }
         for (const auto& command : pending) {
             if (runtime_command && attachment) runtime_command(attachment, command.c_str());
-            publish_snapshot();
+            snapshots.push_back(read_snapshot());
         }
         static ULONGLONG next_snapshot{};
         const auto now = GetTickCount64();
-        if (pending.empty() && now < next_snapshot) return;
-        next_snapshot = now + 250;
-        if (pending.empty()) publish_snapshot();
+        if (pending.empty() && (now >= next_snapshot || loader_state)) {
+            next_snapshot = now + 250;
+            snapshots.push_back(read_snapshot());
+        }
+        // Lua may synchronously send another command; release every plugin lock.
+        lifecycle.unlock();
+        if (loader_state) api->functions->dispatch_lua_event(load_state_event, loader_state);
+        for (const auto& snapshot : snapshots)
+            if (!snapshot.empty()) api->functions->dispatch_lua_event(snapshot_event, snapshot.c_str());
     } catch (...) { if (api->functions->log_error) api->functions->log_error("Cheeky UEVR callback failed"); }
 }
 
 void on_device_reset() {
+    std::lock_guard lifecycle(lifecycle_mutex);
     attached_compositor = nullptr;
     next_openvr_attach = 0;
     if (runtime_tick && attachment) runtime_tick(attachment, 0, nullptr, nullptr);
@@ -132,90 +154,75 @@ template<class T> bool load_export(HMODULE dll, const char* name, T& out) {
     out = reinterpret_cast<T>(GetProcAddress(dll, name)); return out != nullptr;
 }
 
+// Load into local pointers first: a missing export must never leave dangling globals.
 bool initialize_dll() {
-    if (initialized || !api) return true;
+    if (initialized || !api) return initialized;
     try {
+        const auto size = api->functions->get_persistent_dir(nullptr, 0);
+        if (!size || size > 32767) return false;
+        std::vector<wchar_t> directory(size + 1, L'\0');
+        api->functions->get_persistent_dir(directory.data(), static_cast<unsigned>(directory.size()));
+        if (!directory[0]) return false;
         std::vector<wchar_t> path(32768);
         const auto length = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
         if (!length || length >= path.size()) return false;
-        
         const auto runtime_path = std::filesystem::path(path.data()).parent_path() / L"CheekyFoveatedDLSS" / L"CheekyFoveatedDLSSRuntime.dll";
-        const auto dll = LoadLibraryExW(runtime_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!dll) {
+        struct Library {
+            HMODULE value;
+            ~Library() { if (value) FreeLibrary(value); }
+        } dll{LoadLibraryExW(runtime_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)};
+        if (!dll.value) {
             if (api->functions->log_error) api->functions->log_error("Cheeky: cannot load runtime DLL (error %lu). Extract the complete UEVR package including the plugin subfolder.", GetLastError());
             return false;
         }
-
-        if (!load_export(dll, "CheekyUEVR_Start", runtime_start) || !load_export(dll, "CheekyUEVR_Detach", runtime_detach) ||
-            !load_export(dll, "CheekyUEVR_Tick", runtime_tick) || !load_export(dll, "CheekyUEVR_Command", runtime_command) ||
-            !load_export(dll, "CheekyUEVR_Snapshot", runtime_snapshot) ||
-            !load_export(dll, "CheekyUEVR_AttachOpenVR", runtime_attach_openvr)) {
-            runtime_detach = nullptr; FreeLibrary(dll); return false;
-        }
-
-        load_export(dll, "CheekyUEVR_PublishStereo", runtime_publish_stereo);
-        load_export(dll, "CheekyUEVR_PublishRenderingMode", runtime_publish_mode);
-
+        CheekyUEVRStartFn start_fn{};
+        CheekyUEVRDetachFn detach_fn{};
+        CheekyUEVRTickFn tick_fn{};
+        CheekyUEVRCommandFn command_fn{};
+        CheekyUEVRSnapshotFn snapshot_fn{};
+        CheekyUEVRAttachOpenVRFn attach_fn{};
+        if (!load_export(dll.value, "CheekyUEVR_Start", start_fn) ||
+            !load_export(dll.value, "CheekyUEVR_Detach", detach_fn) ||
+            !load_export(dll.value, "CheekyUEVR_Tick", tick_fn) ||
+            !load_export(dll.value, "CheekyUEVR_Command", command_fn) ||
+            !load_export(dll.value, "CheekyUEVR_Snapshot", snapshot_fn) ||
+            !load_export(dll.value, "CheekyUEVR_AttachOpenVR", attach_fn)) return false;
         HMODULE pinned{};
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-            reinterpret_cast<LPCWSTR>(runtime_start), &pinned)) {
-            runtime_detach = nullptr; FreeLibrary(dll); return false;
-        }
-
-        const auto size = api->functions->get_persistent_dir(nullptr, 0);
-        if (!size || size > 32767) { FreeLibrary(dll); return false; }
-        std::vector<wchar_t> directory(size + 1, L'\0');
-        api->functions->get_persistent_dir(directory.data(), static_cast<unsigned>(directory.size()));
-
+            reinterpret_cast<LPCWSTR>(start_fn), &pinned)) return false;
+        runtime_start = start_fn; runtime_detach = detach_fn; runtime_tick = tick_fn;
+        runtime_command = command_fn; runtime_snapshot = snapshot_fn; runtime_attach_openvr = attach_fn;
+        load_export(dll.value, "CheekyUEVR_PublishStereo", runtime_publish_stereo);
+        load_export(dll.value, "CheekyUEVR_PublishRenderingMode", runtime_publish_mode);
         const auto* r = api->renderer;
         CheekyUEVRStart start{};
-        start.config_directory = directory.data(); start.renderer = r->renderer_type; start.device = r->device; start.queue = r->command_queue;
-        start.attachment = &attachment;
-
-        const bool started = runtime_start(&start);
-        FreeLibrary(dll);
-
-        if (!started) {
+        start.config_directory = directory.data(); start.renderer = r->renderer_type;
+        start.device = r->device; start.queue = r->command_queue; start.attachment = &attachment;
+        initialized = runtime_start(&start);
+        if (!initialized) {
+            if (attachment) runtime_detach(attachment);
+            attachment = 0;
             if (api->functions->log_error) api->functions->log_error("Cheeky runtime could not start; see the Cheeky panel/log for details.");
-            return false;
+            // Keep pinned snapshot exports available so Lua can show the failure.
         }
-
-        initialized = true;
-        if (api->functions->log_info) api->functions->log_info("Cheeky UEVR runtime initialized.");
-        return true;
+        return initialized;
     } catch (...) {
-        if (runtime_detach) runtime_detach(attachment);
-        return false;
+        if (runtime_detach && attachment) runtime_detach(attachment);
+        attachment = 0; initialized = false; return false;
     }
 }
 
-void unload_dll() {
-    if (!initialized) return;
-    
-    if (runtime_detach && attachment) {
-        runtime_detach(attachment);
-    }
-
+void detach_runtime() {
+    if (runtime_detach && attachment) runtime_detach(attachment);
     attachment = 0;
-    attached_compositor = nullptr;
-    next_openvr_attach = 0;
-    
-    runtime_start = nullptr;
-    runtime_detach = nullptr;
-    runtime_tick = nullptr;
-    runtime_attach_openvr = nullptr;
-    runtime_publish_stereo = nullptr;
-    runtime_publish_mode = nullptr;
-    runtime_command = nullptr;
-    runtime_snapshot = nullptr;
-
-    {
-        std::lock_guard lock(commands_mutex);
-        commands.clear();
-    }
-
+    attached_compositor = nullptr; next_openvr_attach = 0;
     initialized = false;
-    if (api && api->functions->log_info) api->functions->log_info("Cheeky UEVR runtime unloaded.");
+    runtime_start = nullptr; runtime_detach = nullptr; runtime_tick = nullptr;
+    runtime_attach_openvr = nullptr; runtime_publish_stereo = nullptr; runtime_publish_mode = nullptr;
+    runtime_command = nullptr; runtime_snapshot = nullptr;
+    std::lock_guard lock(commands_mutex);
+    commands.clear();
+    // Hook code stays pinned until application exit; this is a detach, not an unload.
 }
 }
 
@@ -230,6 +237,7 @@ extern "C" __declspec(dllexport) bool uevr_plugin_initialize(const UEVR_PluginIn
     if (!input->functions->get_persistent_dir || !input->functions->dispatch_lua_event || !input->functions->remove_callback ||
         !input->callbacks->on_present || !input->callbacks->on_device_reset || !input->callbacks->on_custom_event) return false;
 
+    if (callbacks_registered) return true;
     api = input;
 
     // Register UEVR callbacks right away so custom events can be captured immediately
@@ -244,11 +252,14 @@ extern "C" __declspec(dllexport) bool uevr_plugin_initialize(const UEVR_PluginIn
         return false;
     }
 
+    callbacks_registered = true;
     return true;
 }
 
 BOOL APIENTRY DllMain(HMODULE self, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) { module = self; DisableThreadLibraryCalls(self); }
-    if (reason == DLL_PROCESS_DETACH) unload_dll();
+    // UEVR removes callbacks before unloading the adapter. Only the runtime's
+    // loader-lock-safe atomic detach is allowed here: no mutexes or host logging.
+    if (reason == DLL_PROCESS_DETACH && runtime_detach) runtime_detach(attachment);
     return TRUE;
 }
