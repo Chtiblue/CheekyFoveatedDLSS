@@ -1,9 +1,8 @@
-# OpenXR menu and shared-gaze regressions
+# OpenXR menu regressions
 
 The normal MSBuild script and top-level CTest suite include the OpenXR binding
-fixture, Cyberpunk shared-gaze checks, calibration startup opt-out and DX11
-shared-menu texture checks. The binding fixture can also be built independently
-from `tests/openxr_binding`.
+fixture and DX11 shared-menu texture checks. The binding fixture can also be built
+independently from `tests/openxr_binding`.
 
 Overlay tests load the matching OpenXR layer beside the test executable; both
 build systems declare that dependency. No separately named build directory is
