@@ -254,7 +254,7 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
         slider("Working scale", working, .1F, 1.0F);
         preset("DLSS-NR preset", preset_value, true);
-        combo("DLSS-NR style", style, "Standard\\0Natural\\0Cinematic\\0");
+        combo("DLSS-NR style", style, "Standard\0Natural\0Cinematic\0");
         slider("Intensity", intensity, 0.0F, 1.0F);
         if (ImGui::TreeNode("Advanced neural rendering")) {
             slider("Local tone strength", tone, 0.0F, 2.0F);
@@ -265,7 +265,7 @@ void draw_extra_nr_pass(Settings& s, int pass) {
             slider("Paper white scale", paper, .01F, 8.0F);
             slider("HDR transfer strength", hdr, 0.0F, 2.0F);
             slider("Color strength", color, 0.0F, 2.0F);
-            combo("Depth convention", depth, "Game NGX flags\\0Normal depth\\0Reversed depth\\0");
+            combo("Depth convention", depth, "Game NGX flags\0Normal depth\0Reversed depth\0");
             slider("Motion scale X multiplier", motion_x, -4.0F, 4.0F);
             slider("Motion scale Y multiplier", motion_y, -4.0F, 4.0F);
             ImGui::TreePop();
