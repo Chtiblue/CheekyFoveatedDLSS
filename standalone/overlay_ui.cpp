@@ -238,6 +238,14 @@ void draw_nr(Settings& s) {
     ImGui::SeparatorText("Size and shape");
     ImGui::Checkbox("Foveated DLSS-NR", &s.nr_foveated);
     if (s.nr_foveated) {
+        ImGui::Checkbox("Second DLSS 5 pass", &s.nr_second_pass);
+        ImGui::TextDisabled("Runs a second DLSS-NR pass only inside the same foveated region.");
+        if (s.nr_second_pass) {
+            ImGui::Checkbox("Third DLSS 5 pass", &s.nr_third_pass);
+            ImGui::TextDisabled("Runs a third DLSS-NR pass on the output of pass 2 with separate history.");
+        } else {
+            s.nr_third_pass = false;
+        }
         ImGui::Checkbox("Use DLSS-SR size and shape", &s.nr_use_sr_foveation);
         if (s.nr_use_sr_foveation) {
             ImGui::TextWrapped("Width, height, roundness and transition follow the DLSS-SR settings, even with SR disabled.");
