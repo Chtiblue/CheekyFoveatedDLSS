@@ -233,6 +233,48 @@ void draw_gaze(Settings& s) {
     }
 }
 
+void draw_extra_nr_pass(Settings& s, int pass) {
+    const bool second = pass == 2;
+    ImGui::PushID(pass);
+    if (ImGui::TreeNode(second ? "DLSS5 Pass 2 - Settings" : "DLSS5 Pass 3 - Settings")) {
+        float& working = second ? s.nr_pass2_working_scale : s.nr_pass3_working_scale;
+        std::uint32_t& preset_value = second ? s.nr_pass2_preset : s.nr_pass3_preset;
+        std::uint32_t& style = second ? s.nr_pass2_style : s.nr_pass3_style;
+        float& intensity = second ? s.nr_pass2_intensity : s.nr_pass3_intensity;
+        float& tone = second ? s.nr_pass2_local_tone_strength : s.nr_pass3_local_tone_strength;
+        float& structure = second ? s.nr_pass2_local_structure_strength : s.nr_pass3_local_structure_strength;
+        float& skin = second ? s.nr_pass2_skin_structure_strength : s.nr_pass3_skin_structure_strength;
+        bool& mask = second ? s.nr_pass2_automatic_mask : s.nr_pass3_automatic_mask;
+        bool& ui = second ? s.nr_pass2_ui_correction : s.nr_pass3_ui_correction;
+        float& paper = second ? s.nr_pass2_paper_white_scale : s.nr_pass3_paper_white_scale;
+        float& hdr = second ? s.nr_pass2_hdr_transfer_strength : s.nr_pass3_hdr_transfer_strength;
+        float& color = second ? s.nr_pass2_color_strength : s.nr_pass3_color_strength;
+        std::uint32_t& depth = second ? s.nr_pass2_depth_convention : s.nr_pass3_depth_convention;
+        float& motion_x = second ? s.nr_pass2_motion_scale_x_multiplier : s.nr_pass3_motion_scale_x_multiplier;
+        float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
+        slider("Working scale", working, .1F, 1.0F);
+        preset("DLSS-NR preset", preset_value, true);
+        combo("DLSS-NR style", style, "Standard\\0Natural\\0Cinematic\\0");
+        slider("Intensity", intensity, 0.0F, 1.0F);
+        if (ImGui::TreeNode("Advanced neural rendering")) {
+            slider("Local tone strength", tone, 0.0F, 2.0F);
+            slider("Local structure strength", structure, 0.0F, 2.0F);
+            ImGui::Checkbox("Automatic mask", &mask);
+            if (mask) slider("Skin structure strength", skin, 0.0F, 2.0F);
+            ImGui::Checkbox("UI correction", &ui);
+            slider("Paper white scale", paper, .01F, 8.0F);
+            slider("HDR transfer strength", hdr, 0.0F, 2.0F);
+            slider("Color strength", color, 0.0F, 2.0F);
+            combo("Depth convention", depth, "Game NGX flags\\0Normal depth\\0Reversed depth\\0");
+            slider("Motion scale X multiplier", motion_x, -4.0F, 4.0F);
+            slider("Motion scale Y multiplier", motion_y, -4.0F, 4.0F);
+            ImGui::TreePop();
+        }
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
 void draw_nr(Settings& s) {
     ImGui::Checkbox("Enable DLSS-NR", &s.nr_enabled);
     ImGui::SeparatorText("Size and shape");
@@ -259,6 +301,7 @@ void draw_nr(Settings& s) {
         ImGui::Checkbox("Show green alignment border", &s.nr_alignment_border_enabled);
     }
     ImGui::SeparatorText("Neural rendering");
+    ImGui::SeparatorText("DLSS5 Pass 1 - Settings");
     combo("Rendering order", s.nr_processing_order, "After upscaling\0Before upscaling (experimental)\0");
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
     combo("DLSS-NR style", s.nr_style, "Standard\0Natural\0Cinematic\0");
@@ -277,6 +320,10 @@ void draw_nr(Settings& s) {
         slider("Motion scale X multiplier", s.nr_motion_scale_x_multiplier, -4.0F, 4.0F);
         slider("Motion scale Y multiplier", s.nr_motion_scale_y_multiplier, -4.0F, 4.0F);
         ImGui::TreePop();
+    }
+    if (s.nr_enabled && s.nr_foveated && s.nr_second_pass) {
+        draw_extra_nr_pass(s, 2);
+        if (s.nr_third_pass) draw_extra_nr_pass(s, 3);
     }
 }
 
