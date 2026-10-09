@@ -26,18 +26,18 @@ struct Slot {
     VkCommandBuffer command{};bool pending{};
     VulkanImage output,motion;
     VulkanPeripheralSlot peripheral;
-    VulkanNrSlot nr;
+    std::array<VulkanNrSlot,3> nr;
     VulkanDispatch composite_dispatch,motion_dispatch;
     std::array<VkImageView,3> game_views{};
     std::shared_ptr<Feature> feature;
-    void clear_bindings(const VulkanDeviceApi& a) {for(auto& view:game_views) {if(view)a.DestroyImageView(a.device,view,nullptr);view={};}feature.reset();peripheral.feature.reset();nr.feature.reset();}
-    void destroy(const VulkanDeviceApi& a) {clear_bindings(a);output.destroy(a);motion.destroy(a);composite_dispatch.destroy(a);motion_dispatch.destroy(a);peripheral.destroy(a);nr.destroy(a);}
+    void clear_bindings(const VulkanDeviceApi& a) {for(auto& view:game_views) {if(view)a.DestroyImageView(a.device,view,nullptr);view={};}feature.reset();peripheral.feature.reset();for(auto& pass:nr)pass.feature.reset();}
+    void destroy(const VulkanDeviceApi& a) {clear_bindings(a);output.destroy(a);motion.destroy(a);composite_dispatch.destroy(a);motion_dispatch.destroy(a);peripheral.destroy(a);for(auto& pass:nr)pass.destroy(a);}
 };
 struct View {
     std::shared_ptr<VulkanDeviceApi> api;
     std::shared_ptr<Feature> feature;
     VulkanPeripheralHistory peripheral;
-    VulkanNrHistory nr;
+    std::array<VulkanNrHistory,3> nr;
     std::deque<Slot> slots;
     unsigned diagnostic_frames{};
 };
@@ -193,14 +193,48 @@ bool evaluate_vulkan_backend(VkCommandBuffer cmd,const NgxParameters* original,c
         if(settings.nr_enabled) {
             if(nr_callbacks)nr_api=*nr_callbacks;
             else vulkan_nr_runtime(*a,nr_api,stats.nr_result);
-        }else view.nr.valid=false;
+        }else for(auto& pass:view.nr)pass.valid=false;
+        // Independent temporal histories and NGX features for every Vulkan NR pass.
+        // Passes 2/3 consume the image decoded by the preceding pass.
+        const auto extra_nr_settings=[](const Settings& base,unsigned pass) {
+            auto out=base;
+#define VULKAN_COPY_NR(field) out.nr_##field = (pass==2U ? base.nr_pass2_##field : base.nr_pass3_##field)
+            VULKAN_COPY_NR(working_scale);VULKAN_COPY_NR(preset);VULKAN_COPY_NR(style);
+            VULKAN_COPY_NR(intensity);VULKAN_COPY_NR(local_tone_strength);
+            VULKAN_COPY_NR(local_structure_strength);VULKAN_COPY_NR(skin_structure_strength);
+            VULKAN_COPY_NR(automatic_mask);VULKAN_COPY_NR(ui_correction);
+            VULKAN_COPY_NR(paper_white_scale);VULKAN_COPY_NR(hdr_transfer_strength);
+            VULKAN_COPY_NR(color_strength);VULKAN_COPY_NR(depth_convention);
+            VULKAN_COPY_NR(motion_scale_x_multiplier);VULKAN_COPY_NR(motion_scale_y_multiplier);
+#undef VULKAN_COPY_NR
+            return out;
+        };
+        const auto run_nr_passes=[&](const DlssFrameContract& contract,VulkanNgxResource& target) {
+            const bool first=vulkan_nr(*a,cmd,contract,effective,&crop,&center,target,*depth,*motion,
+                gpu.nr,slot->nr[0],view.nr[0],nr_api,stats.nr_result);
+            if(first)++stats.nr_active;
+            const bool extra=first && effective.nr_foveated && effective.nr_second_pass;
+            if(!extra){view.nr[1].valid=false;view.nr[2].valid=false;return;}
+            // Each evaluation writes to the same target region. Explicit barriers
+            // make the decoded output visible to the following pass's encoder.
+            vulkan_barrier(*a,cmd,target.resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
+            const auto second=extra_nr_settings(effective,2U);
+            const bool second_ok=vulkan_nr(*a,cmd,contract,second,&crop,&center,target,*depth,*motion,
+                gpu.nr,slot->nr[1],view.nr[1],nr_api,stats.nr_result);
+            if(second_ok)++stats.nr_active;
+            if(!second_ok || !effective.nr_third_pass){view.nr[2].valid=false;return;}
+            vulkan_barrier(*a,cmd,target.resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
+            const auto third=extra_nr_settings(effective,3U);
+            if(vulkan_nr(*a,cmd,contract,third,&crop,&center,target,*depth,*motion,
+                gpu.nr,slot->nr[2],view.nr[2],nr_api,stats.nr_result))++stats.nr_active;
+        };
         NgxParameterOverlay render_parameters(original);
         const bool before=settings.nr_processing_order==NrProcessingOrder::before_upscaling;
         if(settings.nr_enabled && before) {
             auto nr_contract=c;nr_contract.reset|=gaze_reset;
-            if(vulkan_nr(*a,cmd,nr_contract,effective,&crop,&center,*color,*depth,*motion,gpu.nr,slot->nr,view.nr,nr_api,stats.nr_result))++stats.nr_active;
-            if(slot->nr.produced) {
-                color=&slot->nr.processed.ngx;c.color_base_x=c.color_base_y=0;
+            run_nr_passes(nr_contract,*color);
+            if(slot->nr[0].produced) {
+                color=&slot->nr[0].processed.ngx;c.color_base_x=c.color_base_y=0;
                 render_parameters.Set("Color",static_cast<void*>(color));
                 render_parameters.Set("DLSS.Input.Color.Subrect.Base.X",0U);render_parameters.Set("DLSS.Input.Color.Subrect.Base.Y",0U);
                 original=&render_parameters;
@@ -300,7 +334,7 @@ bool evaluate_vulkan_backend(VkCommandBuffer cmd,const NgxParameters* original,c
         if(handled && ngx_succeeded(result) && settings.nr_enabled && !before) {
             vulkan_barrier(*a,cmd,output->resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
             auto nr_contract=input_contract;nr_contract.reset|=gaze_reset;
-            if(vulkan_nr(*a,cmd,nr_contract,effective,&crop,&center,*output,*depth,*motion,gpu.nr,slot->nr,view.nr,nr_api,stats.nr_result))++stats.nr_active;
+            run_nr_passes(nr_contract,*output);
         }
         return handled;
     }catch(...){++stats.failed;stats.reason="Vulkan backend exception";return handled;}
