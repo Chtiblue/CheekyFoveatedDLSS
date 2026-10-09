@@ -126,7 +126,7 @@ bool evaluate_vulkan_backend(VkCommandBuffer cmd,const NgxParameters* original,c
         const auto it=views.find(c.view_id);
         if(it!=views.end()) {
             if(it->second.feature)it->second.feature->history=false;
-            it->second.nr.valid=false;it->second.peripheral.valid=false;
+            for(auto& pass:it->second.nr)pass.valid=false;it->second.peripheral.valid=false;
         }
         if(settings.enabled || settings.nr_enabled) {
             static std::uint64_t logged_skips{};const auto n=++logged_skips;
@@ -143,7 +143,7 @@ bool evaluate_vulkan_backend(VkCommandBuffer cmd,const NgxParameters* original,c
         if(!settings.enabled && !settings.nr_enabled) {
             const auto view=views.find(c.view_id);if(view!=views.end()) {
                 if(view->second.feature)view->second.feature->history=false;
-                view->second.nr.valid=false;view->second.peripheral.valid=false;
+                for(auto& pass:view->second.nr)pass.valid=false;view->second.peripheral.valid=false;
             }
             return skip("Foveation and NR disabled");
         }
@@ -354,7 +354,7 @@ void vulkan_backend_release_device(VkDevice device) noexcept {
     std::lock_guard lock(mutex);
     // Device destruction is an explicit lifetime boundary; the application is
     // required to have completed its work before destroying the device.
-    const auto destroy=[](View& view){for(auto& slot:view.slots)slot.destroy(*view.api);view.feature.reset();view.peripheral.feature.reset();view.nr.feature.reset();};
+    const auto destroy=[](View& view){for(auto& slot:view.slots)slot.destroy(*view.api);view.feature.reset();view.peripheral.feature.reset();for(auto& pass:view.nr)pass.feature.reset();};
     for(auto it=views.begin();it!=views.end();) {if(it->second.api->device==device){destroy(it->second);it=views.erase(it);}else ++it;}
     for(auto it=retired.begin();it!=retired.end();) {if(it->api->device==device){destroy(*it);it=retired.erase(it);}else ++it;}
     auto p=pipelines.find(device);if(p!=pipelines.end()) {
