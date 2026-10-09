@@ -209,32 +209,35 @@ bool evaluate_vulkan_backend(VkCommandBuffer cmd,const NgxParameters* original,c
 #undef VULKAN_COPY_NR
             return out;
         };
-        const auto run_nr_passes=[&](const DlssFrameContract& contract,VulkanNgxResource& target) {
-            const bool first=vulkan_nr(*a,cmd,contract,effective,&crop,&center,target,*depth,*motion,
+        const auto run_nr_passes=[&](const DlssFrameContract& contract,VulkanNgxResource& input)->VulkanNgxResource* {
+            auto* current=&input;
+            const bool first=vulkan_nr(*a,cmd,contract,effective,&crop,&center,*current,*depth,*motion,
                 gpu.nr,slot->nr[0],view.nr[0],nr_api,stats.nr_result);
             if(first)++stats.nr_active;
+            if(slot->nr[0].produced)current=&slot->nr[0].processed.ngx;
             const bool extra=first && effective.nr_foveated && effective.nr_second_pass;
-            if(!extra){view.nr[1].valid=false;view.nr[2].valid=false;return;}
-            // Each evaluation writes to the same target region. Explicit barriers
-            // make the decoded output visible to the following pass's encoder.
-            vulkan_barrier(*a,cmd,target.resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
+            if(!extra){view.nr[1].valid=false;view.nr[2].valid=false;return current;}
+            vulkan_barrier(*a,cmd,current->resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
             const auto second=extra_nr_settings(effective,2U);
-            const bool second_ok=vulkan_nr(*a,cmd,contract,second,&crop,&center,target,*depth,*motion,
+            const bool second_ok=vulkan_nr(*a,cmd,contract,second,&crop,&center,*current,*depth,*motion,
                 gpu.nr,slot->nr[1],view.nr[1],nr_api,stats.nr_result);
             if(second_ok)++stats.nr_active;
-            if(!second_ok || !effective.nr_third_pass){view.nr[2].valid=false;return;}
-            vulkan_barrier(*a,cmd,target.resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
+            if(slot->nr[1].produced)current=&slot->nr[1].processed.ngx;
+            if(!second_ok || !effective.nr_third_pass){view.nr[2].valid=false;return current;}
+            vulkan_barrier(*a,cmd,current->resource.image,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL);
             const auto third=extra_nr_settings(effective,3U);
-            if(vulkan_nr(*a,cmd,contract,third,&crop,&center,target,*depth,*motion,
+            if(vulkan_nr(*a,cmd,contract,third,&crop,&center,*current,*depth,*motion,
                 gpu.nr,slot->nr[2],view.nr[2],nr_api,stats.nr_result))++stats.nr_active;
+            if(slot->nr[2].produced)current=&slot->nr[2].processed.ngx;
+            return current;
         };
         NgxParameterOverlay render_parameters(original);
         const bool before=settings.nr_processing_order==NrProcessingOrder::before_upscaling;
         if(settings.nr_enabled && before) {
             auto nr_contract=c;nr_contract.reset|=gaze_reset;
-            run_nr_passes(nr_contract,*color);
-            if(slot->nr[0].produced) {
-                color=&slot->nr[0].processed.ngx;c.color_base_x=c.color_base_y=0;
+            auto* processed_color=run_nr_passes(nr_contract,*color);
+            if(processed_color!=color) {
+                color=processed_color;c.color_base_x=c.color_base_y=0;
                 render_parameters.Set("Color",static_cast<void*>(color));
                 render_parameters.Set("DLSS.Input.Color.Subrect.Base.X",0U);render_parameters.Set("DLSS.Input.Color.Subrect.Base.Y",0U);
                 original=&render_parameters;
