@@ -57,6 +57,7 @@ struct ViewState {
     unsigned mapping_log_count{};
     bool logged_mapping_ready{};
     std::uint64_t last_mapping_log_qpc{};
+    std::uint64_t last_per_eye_debug_qpc{};
     CropGeometry last_crop{};
     CropGeometry afw_last_crop[2]{};
     bool afw_has_crop[2]{};
@@ -1011,6 +1012,20 @@ bool calculate_coordinated_crop(
             output_origin_x, output_origin_y, crop
         )) {
         return false;
+    }
+
+    // Temporary RDR1 diagnostic: log the actual source and final center for each DLSS view.
+    // Throttled per view to avoid per-frame log spam; remove after validation.
+    if (seconds_between(now, state.last_per_eye_debug_qpc) >= 0.5) {
+        state.last_per_eye_debug_qpc = now;
+        trace_event("RDR1 per-eye gaze DLSS_view=%llu mapped_eye=%u assigned_eye=%u manual=%u shared=%u sample=%u raw=(%.4f,%.4f) final=(%.4f,%.4f) XR_left=(%.4f,%.4f) XR_right=(%.4f,%.4f)",
+            static_cast<unsigned long long>(view_id),
+            state.mapping.view_index, eye_assignment.eye_index,
+            state.manual_mapping ? 1U : 0U, shared_source ? 1U : 0U,
+            use_sample ? 1U : 0U, raw_u, raw_v,
+            temporal_result.center_u, temporal_result.center_v,
+            snapshot.views[0].center_u, snapshot.views[0].center_v,
+            snapshot.views[1].center_u, snapshot.views[1].center_v);
     }
 
     const auto reset_result = evaluate_gaze_reset(
