@@ -1,6 +1,43 @@
 Cyberpunk VR standalone compatibility
 ====================================
 
+Optional shared gaze for the standalone triple-DLSS5 branch
+----------------------------------------------------------
+This branch restores the optional shared-gaze compatibility mode removed by
+upstream commit 0d22b6a, while retaining manual mapping and independent-input
+options. It does not change DLSS-NR multipass processing or global defaults.
+
+In CheekyFoveatedDLSS.ini, [CheekyFoveatedDLSS], set CenterMode=3 (or select
+"Shared right-eye gaze (Cyberpunk compatibility)" in Stereo / Gaze).
+One valid right-eye gaze ray drives BOTH render views after conversion into
+the game's render-camera projection. This is not calibrated stereo mapping;
+eye-order inversion is not used. Check the per-view tracking count, not merely
+whether a gaze signal exists. Missing/stale projections or unfocused/invalid
+gaze cause fallback rather than guessed headset-UV placement.
+
+For native NGX calls without a projection scope, recent symmetric camera
+reuse is restricted to CyberpunkVR_Stereo.dll and expires after 100ms.
+Publication and display-time freshness, session changes and per-publisher
+camera invalidation remain enforced. Existing CenterMode=3 profiles retain
+their intended behavior instead of being normalized to fixed mode.
+
+Optional CheekyRuntime.ini beside the runtime DLL:
+  [Calibration]
+  Enabled=0
+This disables marker acquisition at startup without disabling gaze. The newer
+manual-mapping calibration gate is preserved. Other installations keep their
+default behavior. Retain the F11 override below to avoid the port's F8 binding.
+
+Regression checks on this branch passed for shared gaze on both native views,
+projection/freshness/session/cache safety, mode serialization and reconnect,
+calibration startup opt-out, controller bindings, overlay input/rendering and
+standalone bootstrap. Added checks:
+  CheekyTests.exe --cyberpunk-shared-gaze
+  CheekyRuntimeHostTests.exe --calibration-disabled
+Both are registered in CTest and scripts/build.ps1. This restored implementation
+has prior Cyberpunk headset history; this particular triple-DLSS5 combination
+still needs headset and actual NVIDIA multipass inference validation.
+
 Scope and validation
 --------------------
 Developed against upstream v0.5.4 (d6c18b2). The standalone host/runtime and
