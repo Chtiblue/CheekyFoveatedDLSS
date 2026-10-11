@@ -86,7 +86,7 @@ public:
             std::uint64_t* timestamps{};
             const D3D12_RANGE read_range{0, sizeof(std::uint64_t) * 2U};
             if (SUCCEEDED(s.readback->Map(0, &read_range, reinterpret_cast<void**>(&timestamps)))) {
-                if (timestamps && timestamps[1] >= timestamps[0])
+                if (timestamps && timestamps[0] != 0U && timestamps[1] > timestamps[0])
                     report(s.pass, s.view, s.width, s.height, timestamps[1] - timestamps[0]);
                 s.readback->Unmap(0, nullptr);
             }
