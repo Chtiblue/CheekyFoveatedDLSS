@@ -1,5 +1,6 @@
 #include "dlss_nr_input.hpp"
 #include "dlss_nr_lifetime.hpp"
+#include "nr_gpu_timing.hpp"
 #include "eye_calibration_d3d12.hpp"
 #include "dlss_nr.hpp"
 #include "nr_codec_shader.hpp"
@@ -1003,6 +1004,18 @@ bool evaluate_dlss_nr_internal(
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
     collect_retired_views();
+    // Completed GPU samples are read only after recording retirement and
+    // queue-fence completion. The result is in GPU ticks, not milliseconds.
+    static NrGpuTiming gpu_timing;
+    if (NrGpuTiming::enabled()) {
+        gpu_timing.collect([](unsigned pass, std::uint64_t view, unsigned width,
+            unsigned height, std::uint64_t ticks) {
+            trace_event("[NR-GPU-TICKS] pass=%u view=%llu ticks=%llu working=%ux%u "
+                "(GPU timestamp delta; queue frequency not yet resolved)",
+                pass, static_cast<unsigned long long>(view),
+                static_cast<unsigned long long>(ticks), width, height);
+        });
+    }
     diagnostics.skip_reason = nullptr;
     diagnostics.route = frame.route;
     diagnostics.hdr_input = (frame.create_flags & 1U) != 0U;
@@ -1346,6 +1359,18 @@ bool evaluate_dlss_nr_internal(
     // Experimental diagnostic: CPU wall-clock time spent submitting NGX evaluation.
     // This is NOT GPU execution time. A future timestamp-query/fence path is
     // required before drawing any conclusions about GPU frame cost.
+    NrGpuTiming::Sample* gpu_sample = nullptr;
+    if (NrGpuTiming::enabled()) {
+        ID3D12Device* timing_device{};
+        if (SUCCEEDED(frame.command_list->GetDevice(IID_PPV_ARGS(&timing_device))) &&
+            timing_device != nullptr) {
+            gpu_sample = gpu_timing.begin(frame.command_list, timing_device, frame.view_id,
+                (frame.view_id & kNrPass3ViewBit) != 0U ? 3U :
+                ((frame.view_id & kNrPass2ViewBit) != 0U ? 2U : 1U),
+                working_width, working_height);
+            timing_device->Release();
+        }
+    }
     const auto nr_submit_begin = std::chrono::steady_clock::now();
     const auto result = runtime.evaluate_feature(
         frame.command_list,
@@ -1353,6 +1378,7 @@ bool evaluate_dlss_nr_internal(
         parameters,
         nullptr
     );
+    gpu_timing.end(frame.command_list, gpu_sample);
     const auto nr_submit_us = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - nr_submit_begin).count();
     // Log only initial and periodic samples to avoid hot-path log spam.
