@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1342,12 +1343,32 @@ bool evaluate_dlss_nr_internal(
     parameters->Set("DLSSNR.Upscaling", 0U);
     set_model_tuning(parameters, settings);
 
+    // Experimental diagnostic: CPU wall-clock time spent submitting NGX evaluation.
+    // This is NOT GPU execution time. A future timestamp-query/fence path is
+    // required before drawing any conclusions about GPU frame cost.
+    const auto nr_submit_begin = std::chrono::steady_clock::now();
     const auto result = runtime.evaluate_feature(
         frame.command_list,
         view.handle,
         parameters,
         nullptr
     );
+    const auto nr_submit_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - nr_submit_begin).count();
+    // Log only initial and periodic samples to avoid hot-path log spam.
+    // Pass bits already namespace the per-eye NR histories independently.
+    static std::array<std::atomic<std::uint64_t>, 3> nr_submit_samples{};
+    const unsigned nr_pass_index = (frame.view_id & kNrPass3ViewBit) != 0U ? 2U :
+        (frame.view_id & kNrPass2ViewBit) != 0U ? 1U : 0U;
+    const auto nr_sample = nr_submit_samples[nr_pass_index].fetch_add(
+        1U, std::memory_order_relaxed) + 1U;
+    if (nr_sample <= 6U || nr_sample % 600U == 0U) {
+        trace_event("[NR-CPU-SUBMIT] pass=%u view=%llu elapsed_us=%lld sample=%llu "
+            "working=%ux%u (CPU wall time, NOT GPU time)",
+            nr_pass_index + 1U, static_cast<unsigned long long>(frame.view_id),
+            static_cast<long long>(nr_submit_us),
+            static_cast<unsigned long long>(nr_sample), working_width, working_height);
+    }
     diagnostics.last_result = result;
     diagnostics.output_width = frame.output_width;
     diagnostics.output_height = frame.output_height;
