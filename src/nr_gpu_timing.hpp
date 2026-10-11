@@ -13,6 +13,7 @@ namespace cheeky::foveated_dlss {
 class NrGpuTiming {
     using ComResource = Microsoft::WRL::ComPtr<ID3D12Resource>;
     using ComHeap = Microsoft::WRL::ComPtr<ID3D12QueryHeap>;
+public:
     struct Sample {
         ComHeap queries;
         ComResource readback;
@@ -21,6 +22,7 @@ class NrGpuTiming {
         unsigned pass{};
         unsigned width{}, height{};
     };
+private:
     std::deque<std::unique_ptr<Sample>> pending_;
     std::uint64_t attempted_{};
 public:
