@@ -50,3 +50,27 @@ Reference: https://github.com/Skynizz/optiscaler-dlss5/blob/main/OptiScaler/dlss
 ## Licensing
 
 Skynizz/optiscaler-dlss5 declares GPL-3.0. Before copying code, inspect Cheeky's applicable licenses and preserve attribution / compatible distribution terms. Prefer adapting ideas independently where appropriate.
+
+## GPU timestamp prototype (experimental, not yet built or tested)
+
+Commit series adds `src/nr_gpu_timing.hpp` and wraps each `runtime.evaluate_feature`
+in two D3D12 timestamp queries plus a deferred readback. The feature is **off by
+default** and only activates when the process environment contains
+`CHEEKY_NR_GPU_TIMING=1` before game launch.
+
+- Samples the first 12 eligible evaluations, then every 600th call (globally).
+- Retains query/readback resources through `NrLifetime`; polls without blocking,
+  only maps after command-list retirement and GPU queue-fence completion.
+- Logs `[NR-GPU-TICKS]` with per-pass view ID and raw timestamp **ticks**.
+- Raw ticks are **not milliseconds**. A reliable queue timestamp frequency must
+  be associated with the executing queue before reporting ms. Multiple queues
+  or unusual replay patterns require special handling.
+- Up to 32 pending samples are retained; while full, sampling stops.
+- CPU submission timing remains separate (`[NR-CPU-SUBMIT]`).
+- No cache is implemented; the NR model still runs normally every pass/frame.
+
+**Required before headset testing:** compile Windows x64, run existing tests,
+verify that D3D12 debug layer reports no query/resource-state errors, and
+confirm that timestamp samples eventually retire and log. If they do not,
+disable the flag and investigate recording retirement. Do not ship or merge
+this prototype without validation.
