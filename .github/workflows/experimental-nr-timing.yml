@@ -1,0 +1,27 @@
+name: Experimental NR GPU timing build
+
+on:
+  push:
+    branches:
+      - experiment/nr-temporal-cache-vr
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure x64
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCHEEKY_BUILD_UEVR=OFF -DCHEEKY_BUILD_STANDALONE=ON
+      - name: Compile standalone runtime
+        run: cmake --build build --config Release --target CheekyFoveatedDLSSRuntime --parallel 2
+      - name: Build NR tests
+        run: cmake --build build --config Release --target CheekyNrObserverTests --parallel 2
+      - name: Run NR tests
+        run: ctest --test-dir build -C Release --output-on-failure -R "CheekyNrObserver"
