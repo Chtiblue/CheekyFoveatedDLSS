@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <new>
 
 namespace cheeky::foveated_dlss {
 class NrGpuTiming {
@@ -40,7 +41,8 @@ public:
         if (!enabled() || !list || !device || pending_.size() >= 32U) return nullptr;
         // A low sampling rate limits timestamp overhead and GPU readback memory.
         if (++attempted_ > 12U && attempted_ % 600U != 0U) return nullptr;
-        auto sample = std::make_unique<Sample>();
+        std::unique_ptr<Sample> sample(new (std::nothrow) Sample());
+        if (!sample) return nullptr;
         D3D12_QUERY_HEAP_DESC q{};
         q.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
         q.Count = 2;
