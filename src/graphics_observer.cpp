@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <new>
 
 namespace cheeky::foveated_dlss {
@@ -30,6 +31,10 @@ struct ObservationScope {
             observing = false;
     }
 };
+using OmSetRenderTargetsFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, const D3D12_CPU_DESCRIPTOR_HANDLE*, BOOL, const D3D12_CPU_DESCRIPTOR_HANDLE*);
+struct StereoDsvRecord { ID3D12Resource* resource{}; unsigned first_slice{}, array_size{}; };
+std::mutex stereo_dsv_mutex;
+std::unordered_map<SIZE_T, StereoDsvRecord> stereo_dsv_records;
 using CreateSrvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_SHADER_RESOURCE_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
 using CreateDsvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_DEPTH_STENCIL_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
 using ExecuteFn = void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
@@ -87,7 +92,7 @@ template<class Signature, auto Handler> bool install_method(void* target) {
     return true;
 }
 // ID3D12CommandQueue / ID3D12GraphicsCommandList COM ABI indices.
-constexpr unsigned srv_slot = 18, dsv_slot = 21;
+constexpr unsigned srv_slot = 18, dsv_slot = 21, om_targets_slot = 46;
 constexpr unsigned execute_slot = 10, reset_slot = 10, copy_texture_slot = 16, copy_slot = 17,
                    resolve_slot = 19;
 void* method(void* object, unsigned index) {
@@ -442,7 +447,43 @@ void observe_dsv(CreateDsvFn next, ID3D12Device* device, ID3D12Resource* resourc
             }
         }
     }
+    if (resource) {
+        const auto rd = resource->GetDesc();
+        if (rd.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && rd.DepthOrArraySize > 1) {
+            const bool array = desc && desc->ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+            const StereoDsvRecord record{resource,
+                array ? desc->Texture2DArray.FirstArraySlice : UINT32_MAX,
+                array ? desc->Texture2DArray.ArraySize : 0U};
+            std::lock_guard lock(stereo_dsv_mutex);
+            if (stereo_dsv_records.size() >= 512) stereo_dsv_records.clear();
+            stereo_dsv_records[destination.ptr] = record;
+        }
+    }
     next(device, resource, desc, destination);
+}
+void observe_om_targets(OmSetRenderTargetsFn next, ID3D12GraphicsCommandList* list,
+    UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* targets, BOOL single_range,
+    const D3D12_CPU_DESCRIPTOR_HANDLE* depth) {
+    if (depth) {
+        StereoDsvRecord record{};
+        bool found{};
+        {
+            std::lock_guard lock(stereo_dsv_mutex);
+            const auto it = stereo_dsv_records.find(depth->ptr);
+            if (it != stereo_dsv_records.end()) { record = it->second; found = true; }
+        }
+        if (found) {
+            static std::atomic<unsigned> samples{};
+            const auto sample = samples.fetch_add(1, std::memory_order_relaxed);
+            if (sample < 48 || sample % 3000 == 0) {
+                trace_event("RDRVR-VIMAIN D3D12 OM depth=%p descriptor=%llu firstSlice=%u arraySize=%u list=%p rtCount=%u singleRange=%u (binding only)",
+                    static_cast<void*>(record.resource), static_cast<unsigned long long>(depth->ptr),
+                    record.first_slice, record.array_size, static_cast<void*>(list),
+                    count, static_cast<unsigned>(single_range));
+            }
+        }
+    }
+    next(list, count, targets, single_range, depth);
 }
 std::uint64_t observe_native_resource(ID3D12Resource* resource) noexcept {
     try { return track(resource); } catch (...) { return 0; }
@@ -475,6 +516,7 @@ bool initialize_native_observer(ID3D12Device* device, ID3D12CommandQueue* queue)
     const auto before = method_count;
     if (!install_method<CreateSrvFn, &observe_srv>(method(device, srv_slot)) ||
         !install_method<CreateDsvFn, &observe_dsv>(method(device, dsv_slot)) ||
+        !install_method<OmSetRenderTargetsFn, &observe_om_targets>(method(list.Get(), om_targets_slot)) ||
         !install_method<ExecuteFn, &execute>(targets[0]) ||
         !install_method<ResetFn, &reset>(targets[1]) ||
         !install_method<CopyFn, &copy_resource>(targets[2]) ||
