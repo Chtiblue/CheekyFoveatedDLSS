@@ -4678,21 +4678,30 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
-    // Restrict the experimental stereo slice workaround to Red Dead Redemption.
-    // Executable-name guard is deliberately fail-closed for other games (CP77,
-    // etc.). The RDRVR injector is not modified by this check.
-    static const bool rdrvr_process = []() noexcept {
-        wchar_t executable[MAX_PATH]{};
-        const DWORD length = GetModuleFileNameW(nullptr, executable, MAX_PATH);
+    // Per-installation opt-in, allowing each game's Cheeky DLL directory to
+    // independently enable the experimental two-slice stereo workaround.
+    // Read once on first NGX frame; changing the INI requires a game restart.
+    static const bool stereo_array_slices_enabled = []() noexcept {
+        HMODULE self{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                 reinterpret_cast<LPCWSTR>(&native_nr_frame), &self))
+            return false;
+        wchar_t path[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameW(self, path, MAX_PATH);
         if (length == 0 || length >= MAX_PATH) return false;
-        const wchar_t* basename = wcsrchr(executable, L'\\');
-        basename = basename ? basename + 1 : executable;
-        return _wcsicmp(basename, L"RDR.exe") == 0;
+        wchar_t* slash = wcsrchr(path, L'\\');
+        if (!slash) return false;
+        constexpr wchar_t filename[] = L"CheekyStereo.ini";
+        if (static_cast<std::size_t>(slash - path) + std::size(filename) >= MAX_PATH)
+            return false;
+        wcscpy_s(slash + 1, MAX_PATH - static_cast<std::size_t>(slash + 1 - path), filename);
+        return GetPrivateProfileIntW(L"Stereo", L"StereoArraySlices", 0, path) == 1;
     }();
     // Experimental RDRVR ViMain probe: assign stable eye slots by first-seen
     // NGX handle, not by pointer parity or the last bound DSV. No changes to
     // the game, and never assign a slice when more than two views are present.
-    if (rdrvr_process && frame.depth && frame.motion_vectors) {
+    if (stereo_array_slices_enabled && frame.depth && frame.motion_vectors) {
         const auto dd = frame.depth->GetDesc();
         const auto md = frame.motion_vectors->GetDesc();
         if (dd.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
