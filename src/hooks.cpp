@@ -2951,8 +2951,8 @@ bool streamline_nr_frame(ID3D12GraphicsCommandList* command_list,
     // Correlate Streamline's explicit viewport with native NGX handle/resource
     // diagnostics. Resource equality is observational, not proof of eye slice.
     if (depth.resource && motion.resource && depth.resource->native && motion.resource->native) {
-        const auto* d = static_cast<ID3D12Resource*>(depth.resource->native);
-        const auto* m = static_cast<ID3D12Resource*>(motion.resource->native);
+        auto* d = static_cast<ID3D12Resource*>(depth.resource->native);
+        auto* m = static_cast<ID3D12Resource*>(motion.resource->native);
         const auto dd = d->GetDesc();
         const auto md = m->GetDesc();
         if (dd.DepthOrArraySize > 1 || md.DepthOrArraySize > 1) {
