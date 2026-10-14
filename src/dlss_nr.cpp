@@ -1035,6 +1035,32 @@ bool evaluate_dlss_nr_internal(
                     diagnostics.skip_reason ? diagnostics.skip_reason : "none", diagnostics.last_result, count);
         }
     } history_guard{view};
+    // Diagnostic only: identify which D3D12 guide constraint ViMain stereo violates.
+    const auto trace_rejected_guides = [&](const char* stage) {
+        const auto failure = diagnostics.failed_calls;
+        if (failure > 8U && (failure & (failure - 1U)) != 0U) return;
+        const auto describe = [&](const char* name, ID3D12Resource* resource) {
+            if (!resource) {
+                trace_event("RDRVR-VIMAIN guide=%s resource=NULL stage=%s view=%llu", name, stage, frame.view_id);
+                return;
+            }
+            const auto d = resource->GetDesc();
+            trace_event("RDRVR-VIMAIN guide=%s stage=%s view=%llu dimension=%u width=%llu height=%u array=%u samples=%u flags=0x%X format=%u",
+                name, stage, frame.view_id, static_cast<unsigned>(d.Dimension),
+                static_cast<unsigned long long>(d.Width), d.Height, d.DepthOrArraySize,
+                d.SampleDesc.Count, static_cast<unsigned>(d.Flags), static_cast<unsigned>(d.Format));
+        };
+        trace_event("RDRVR-VIMAIN rejection stage=%s view=%llu commandList=%u color=%u depth=%u motion=%u input=%ux%u output=%ux%u depthRect=%u,%u %ux%u motionRect=%u,%u %ux%u motion3d=%u depthState=0x%X motionState=0x%X",
+            stage, frame.view_id, frame.command_list != nullptr, frame.color != nullptr,
+            frame.depth != nullptr, frame.motion_vectors != nullptr, frame.input_width,
+            frame.input_height, frame.output_width, frame.output_height, frame.depth_base_x,
+            frame.depth_base_y, frame.depth_width, frame.depth_height, frame.motion_base_x,
+            frame.motion_base_y, frame.motion_width, frame.motion_height,
+            static_cast<unsigned>(frame.motion_vectors_3d), static_cast<unsigned>(frame.depth_state),
+            static_cast<unsigned>(frame.motion_state));
+        describe("depth", frame.depth);
+        describe("motion", frame.motion_vectors);
+    };
     if (frame.command_list == nullptr || frame.view_id == 0U ||
         frame.color == nullptr || frame.depth == nullptr ||
         frame.motion_vectors == nullptr || frame.input_width == 0U ||
@@ -1048,6 +1074,7 @@ bool evaluate_dlss_nr_internal(
         frame.depth_state == static_cast<D3D12_RESOURCE_STATES>(0xFFFFFFFFU)) {
         diagnostics.state = DlssNrState::unsupported_resources;
         ++diagnostics.failed_calls;
+        trace_rejected_guides("missing-or-invalid-input");
         return false;
     }
     const auto guide_valid = [](ID3D12Resource* resource, std::uint32_t x, std::uint32_t y,
@@ -1062,6 +1089,7 @@ bool evaluate_dlss_nr_internal(
         !guide_valid(frame.motion_vectors, frame.motion_base_x, frame.motion_base_y, frame.motion_width, frame.motion_height)) {
         diagnostics.state = DlssNrState::unsupported_resources;
         ++diagnostics.failed_calls;
+        trace_rejected_guides("guide-texture-incompatible");
         return false;
     }
     ID3D12Device* device{};
