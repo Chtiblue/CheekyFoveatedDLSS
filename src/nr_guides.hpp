@@ -14,6 +14,8 @@ struct NrGuidePass {
     Ptr<ID3D12DescriptorHeap> heap;
     Ptr<ID3D12RootSignature> root;
     Ptr<ID3D12PipelineState> pipeline;
+    // Stereo array guides: select one slice through a Texture2DArray SRV.
+    unsigned motion_slice{}, depth_slice{};
     static DXGI_FORMAT readable(DXGI_FORMAT f) noexcept {
         switch(f) {
         case DXGI_FORMAT_R32_TYPELESS: case DXGI_FORMAT_D32_FLOAT: return DXGI_FORMAT_R32_FLOAT;
@@ -27,8 +29,8 @@ struct NrGuidePass {
         default: return f;
         }
     }
-    bool initialize(ID3D12Resource* mv, ID3D12Resource* z, unsigned w, unsigned h, const NrGuidePass* shared = nullptr) {
-        source_motion=mv; source_depth=z;
+    bool initialize(ID3D12Resource* mv, ID3D12Resource* z, unsigned w, unsigned h, const NrGuidePass* shared = nullptr, unsigned mv_slice = 0, unsigned z_slice = 0) {
+        source_motion=mv; source_depth=z; motion_slice=mv_slice; depth_slice=z_slice;
         Ptr<ID3D12Device> device;
         if (FAILED(mv->GetDevice(IID_PPV_ARGS(&device)))) return false;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -42,9 +44,12 @@ struct NrGuidePass {
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors=4; hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)))) return false;
         auto cpu=heap->GetCPUDescriptorHandleForHeapStart(); auto step=device->GetDescriptorHandleIncrementSize(hd.Type);
+        unsigned guide_index = 0;
         for (auto* source : {mv,z}) {
+            const auto slice = guide_index++ == 0 ? motion_slice : depth_slice;
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format=readable(source->GetDesc().Format);
-            sd.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D; sd.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels=1;
+            sd.ViewDimension=source->GetDesc().DepthOrArraySize > 1 ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D; sd.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels=1;
+            if (sd.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY) { sd.Texture2DArray.MipLevels = 1; sd.Texture2DArray.FirstArraySlice = slice; sd.Texture2DArray.ArraySize = 1; }
             device->CreateShaderResourceView(source,&sd,cpu); cpu.ptr+=step;
         }
         for (auto* target : {motion.Get(),depth.Get()}) {
@@ -66,13 +71,17 @@ struct NrGuidePass {
         return SUCCEEDED(device->CreateComputePipelineState(&pd,IID_PPV_ARGS(&pipeline)));
     }
     // Caller must prove all recordings using this heap have completed.
-    void rebind(ID3D12Device* device, ID3D12Resource* mv, ID3D12Resource* z) {
+    void rebind(ID3D12Device* device, ID3D12Resource* mv, ID3D12Resource* z, unsigned mv_slice = 0, unsigned z_slice = 0) {
+        motion_slice = mv_slice; depth_slice = z_slice;
         auto cpu = heap->GetCPUDescriptorHandleForHeapStart();
         const auto step = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        unsigned guide_index = 0;
         for (auto* source : {mv, z}) {
+            const auto slice = guide_index++ == 0 ? motion_slice : depth_slice;
             D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
             desc.Format = readable(source->GetDesc().Format);
-            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            desc.ViewDimension = source->GetDesc().DepthOrArraySize > 1 ? D3D12_SRV_DIMENSION_TEXTURE2DARRAY : D3D12_SRV_DIMENSION_TEXTURE2D;
+            if (desc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY) { desc.Texture2DArray.MipLevels = 1; desc.Texture2DArray.FirstArraySlice = slice; desc.Texture2DArray.ArraySize = 1; }
             desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             desc.Texture2D.MipLevels = 1;
             device->CreateShaderResourceView(source, &desc, cpu); cpu.ptr += step;
