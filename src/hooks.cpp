@@ -4668,6 +4668,21 @@ NgxResult hook_core_create_d3d12(
             static std::atomic<unsigned> stereo_samples{};
             const auto sample = stereo_samples.fetch_add(1, std::memory_order_relaxed);
             if (sample < 12 || sample % 600 == 0) {
+                // Probe documented and common integration-specific integer keys.
+                // Successful reads are evidence only; no key is trusted as a slice yet.
+                constexpr const char* stereo_keys[] = {
+                    "ViewIndex", "ViewID", "EyeIndex", "Eye", "StereoEye",
+                    "DLSS.ViewIndex", "DLSS.EyeIndex", "DLSS.Input.Depth.ArraySlice",
+                    "DLSS.Input.MV.ArraySlice", "DLSS.Input.Depth.Subrect.Base.Z",
+                    "DLSS.Input.MV.Subrect.Base.Z"
+                };
+                for (const auto* key : stereo_keys) {
+                    unsigned value{};
+                    if (parameters && ngx_succeeded(parameters->Get(key, &value))) {
+                        trace_event("RDRVR-VIMAIN NGX metadata view=%llu key=%s value=%u (unverified)",
+                            static_cast<unsigned long long>(frame.view_id), key, value);
+                    }
+                }
                 trace_event("RDRVR-VIMAIN native eye evidence view=%llu afwSourceEye=%u depthArray=%u motionArray=%u depth=%p motion=%p (mapping unverified)",
                     static_cast<unsigned long long>(frame.view_id), afw_current_source_eye(),
                     static_cast<unsigned>(depth_desc.DepthOrArraySize),
