@@ -36,6 +36,9 @@ struct DlssNrFrame {
     D3D12_RESOURCE_STATES color_state{D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
     ID3D12Resource* depth{};
     ID3D12Resource* motion_vectors{};
+    // UINT32_MAX means stereo array slice is not established; never guess the eye.
+    std::uint32_t depth_array_slice{UINT32_MAX};
+    std::uint32_t motion_array_slice{UINT32_MAX};
     std::uint32_t input_width{};
     std::uint32_t input_height{};
     std::uint32_t output_width{};
