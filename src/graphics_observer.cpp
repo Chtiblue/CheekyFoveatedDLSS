@@ -35,6 +35,8 @@ using OmSetRenderTargetsFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*
 struct StereoDsvRecord { ID3D12Resource* resource{}; unsigned first_slice{}, array_size{}; };
 std::mutex stereo_dsv_mutex;
 std::unordered_map<SIZE_T, StereoDsvRecord> stereo_dsv_records;
+std::unordered_map<ID3D12GraphicsCommandList*, StereoDepthBinding> stereo_list_bindings;
+std::uint64_t stereo_binding_sequence{};
 using CreateSrvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_SHADER_RESOURCE_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
 using CreateDsvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_DEPTH_STENCIL_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
 using ExecuteFn = void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
@@ -335,6 +337,10 @@ HRESULT reset(ResetFn real_reset, ID3D12GraphicsCommandList* list, ID3D12Command
         }
     }
     if (SUCCEEDED(hr)) {
+        {
+            std::lock_guard lock(stereo_dsv_mutex);
+            stereo_list_bindings.erase(list);
+        }
         note_d3d12_command_list_reset(list);
         reset_gaze_copies(reinterpret_cast<std::uint64_t>(list));
         ++resets;
@@ -473,6 +479,11 @@ void observe_om_targets(OmSetRenderTargetsFn next, ID3D12GraphicsCommandList* li
             if (it != stereo_dsv_records.end()) { record = it->second; found = true; }
         }
         if (found) {
+            {
+                std::lock_guard lock(stereo_dsv_mutex);
+                if (stereo_list_bindings.size() >= 256) stereo_list_bindings.clear();
+                stereo_list_bindings[list] = {record.resource, record.first_slice, record.array_size, ++stereo_binding_sequence};
+            }
             static std::atomic<unsigned> samples{};
             const auto sample = samples.fetch_add(1, std::memory_order_relaxed);
             if (sample < 48 || sample % 3000 == 0) {
@@ -484,6 +495,11 @@ void observe_om_targets(OmSetRenderTargetsFn next, ID3D12GraphicsCommandList* li
         }
     }
     next(list, count, targets, single_range, depth);
+}
+StereoDepthBinding observe_stereo_depth_binding(ID3D12GraphicsCommandList* list) noexcept {
+    std::lock_guard lock(stereo_dsv_mutex);
+    const auto it = stereo_list_bindings.find(list);
+    return it == stereo_list_bindings.end() ? StereoDepthBinding{} : it->second;
 }
 std::uint64_t observe_native_resource(ID3D12Resource* resource) noexcept {
     try { return track(resource); } catch (...) { return 0; }
