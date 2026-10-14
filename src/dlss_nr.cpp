@@ -1096,6 +1096,16 @@ bool evaluate_dlss_nr_internal(
         !guide_valid(frame.motion_vectors, frame.motion_base_x, frame.motion_base_y, frame.motion_width, frame.motion_height, frame.motion_array_slice)) {
         diagnostics.state = DlssNrState::unsupported_resources;
         ++diagnostics.failed_calls;
+        if (frame.depth && frame.motion_vectors) {
+            const auto depth_desc = frame.depth->GetDesc();
+            const auto motion_desc = frame.motion_vectors->GetDesc();
+            if (depth_desc.DepthOrArraySize > 1 || motion_desc.DepthOrArraySize > 1) {
+                trace_event("RDRVR-VIMAIN stereo mapping view=%llu depthArray=%u depthSlice=%u motionArray=%u motionSlice=%u (UINT32_MAX=unknown; no guessed eye)",
+                    static_cast<unsigned long long>(frame.view_id),
+                    static_cast<unsigned>(depth_desc.DepthOrArraySize), frame.depth_array_slice,
+                    static_cast<unsigned>(motion_desc.DepthOrArraySize), frame.motion_array_slice);
+            }
+        }
         trace_rejected_guides("guide-texture-incompatible-or-stereo-slice-unknown");
         return false;
     }
