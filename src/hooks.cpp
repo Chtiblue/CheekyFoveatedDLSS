@@ -4678,10 +4678,21 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
+    // Restrict the experimental stereo slice workaround to Red Dead Redemption.
+    // Executable-name guard is deliberately fail-closed for other games (CP77,
+    // etc.). The RDRVR injector is not modified by this check.
+    static const bool rdrvr_process = []() noexcept {
+        wchar_t executable[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameW(nullptr, executable, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) return false;
+        const wchar_t* basename = wcsrchr(executable, L'\\');
+        basename = basename ? basename + 1 : executable;
+        return _wcsicmp(basename, L"RDR.exe") == 0;
+    }();
     // Experimental RDRVR ViMain probe: assign stable eye slots by first-seen
     // NGX handle, not by pointer parity or the last bound DSV. No changes to
     // the game, and never assign a slice when more than two views are present.
-    if (frame.depth && frame.motion_vectors) {
+    if (rdrvr_process && frame.depth && frame.motion_vectors) {
         const auto dd = frame.depth->GetDesc();
         const auto md = frame.motion_vectors->GetDesc();
         if (dd.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
