@@ -4678,6 +4678,37 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
+    // Experimental RDRVR ViMain probe: assign stable eye slots by first-seen
+    // NGX handle, not by pointer parity or the last bound DSV. No changes to
+    // the game, and never assign a slice when more than two views are present.
+    if (frame.depth && frame.motion_vectors) {
+        const auto dd = frame.depth->GetDesc();
+        const auto md = frame.motion_vectors->GetDesc();
+        if (dd.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            md.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            dd.DepthOrArraySize == 2 && md.DepthOrArraySize == 2) {
+            static std::mutex eye_slot_mutex;
+            static DlssViewId eye_slots[2]{};
+            unsigned slot = 2;
+            {
+                std::lock_guard lock(eye_slot_mutex);
+                if (eye_slots[0] == frame.view_id) slot = 0;
+                else if (eye_slots[1] == frame.view_id) slot = 1;
+                else if (eye_slots[0] == 0) { eye_slots[0] = frame.view_id; slot = 0; }
+                else if (eye_slots[1] == 0) { eye_slots[1] = frame.view_id; slot = 1; }
+            }
+            if (slot < 2) {
+                frame.depth_array_slice = slot;
+                frame.motion_array_slice = slot;
+                static std::atomic<unsigned> probe_samples{};
+                const auto sample = probe_samples.fetch_add(1, std::memory_order_relaxed);
+                if (sample < 16 || sample % 600 == 0)
+                    trace_event("RDRVR-VIMAIN EXPERIMENTAL fixed eye slot view=%llu slot=%u depth=%p motion=%p (unverified mapping)",
+                        static_cast<unsigned long long>(frame.view_id), slot,
+                        static_cast<void*>(frame.depth), static_cast<void*>(frame.motion_vectors));
+            }
+        }
+    }
     // View-instanced stereo resources do not expose their array-slice identity
     // through the ordinary NGX Depth/MotionVectors pointers. Record the
     // independent eye observation, but never equate it with a slice without
