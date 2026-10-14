@@ -4689,6 +4689,12 @@ NgxResult hook_core_create_d3d12(
             static std::atomic<unsigned> stereo_samples{};
             const auto sample = stereo_samples.fetch_add(1, std::memory_order_relaxed);
             if (sample < 12 || sample % 600 == 0) {
+                const auto binding = observe_stereo_depth_binding(command_list);
+                trace_event("RDRVR-VIMAIN NGX list correlation view=%llu list=%p ngxDepth=%p boundDepth=%p boundSlice=%u boundCount=%u bindingSequence=%llu (not proof of eye mapping)",
+                    static_cast<unsigned long long>(frame.view_id), static_cast<void*>(command_list),
+                    static_cast<void*>(frame.depth), static_cast<void*>(binding.resource),
+                    binding.first_slice, binding.array_size,
+                    static_cast<unsigned long long>(binding.sequence));
                 // Probe documented and common integration-specific integer keys.
                 // Successful reads are evidence only; no key is trusted as a slice yet.
                 constexpr const char* stereo_keys[] = {
