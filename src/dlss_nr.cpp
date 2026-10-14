@@ -756,7 +756,9 @@ void evict_retired_features(ViewState& view) noexcept {
             (border_only || (gpu.width == region.width && gpu.height == region.height &&
             gpu.working_width == working_width && gpu.working_height == working_height &&
             gpu.guides.source_motion.Get() == frame.motion_vectors &&
-            gpu.guides.source_depth.Get() == frame.depth))) {
+            gpu.guides.source_depth.Get() == frame.depth &&
+            (frame.motion_vectors->GetDesc().DepthOrArraySize == 1 || gpu.guides.motion_slice == frame.motion_array_slice) &&
+            (frame.depth->GetDesc().DepthOrArraySize == 1 || gpu.guides.depth_slice == frame.depth_array_slice)))) {
             if (!gpu.uses.record(frame.command_list)) return nullptr;
             gpu.last_use = ++view.gpu_use_sequence;
             return &gpu;
@@ -786,7 +788,9 @@ void evict_retired_features(ViewState& view) noexcept {
         cpu.ptr += gpu.descriptor_size;
         device->CreateUnorderedAccessView(frame.color, nullptr, &uav, cpu);
         frame.color->AddRef(); release(gpu.game_output); gpu.game_output = frame.color;
-        if (!border_only) gpu.guides.rebind(device.Get(), frame.motion_vectors, frame.depth);
+        if (!border_only) gpu.guides.rebind(device.Get(), frame.motion_vectors, frame.depth,
+            frame.motion_vectors->GetDesc().DepthOrArraySize > 1 ? frame.motion_array_slice : 0U,
+            frame.depth->GetDesc().DepthOrArraySize > 1 ? frame.depth_array_slice : 0U);
         ++diagnostics.resource_rebinds;
         if (!gpu.uses.record(frame.command_list)) return nullptr;
         gpu.last_use = ++view.gpu_use_sequence;
@@ -829,7 +833,9 @@ void evict_retired_features(ViewState& view) noexcept {
             working_width,
             working_height,
             gpu, shared
-        ) || (!border_only && !gpu.guides.initialize(frame.motion_vectors, frame.depth, working_width, working_height, shared ? &shared->guides : nullptr))) {
+        ) || (!border_only && !gpu.guides.initialize(frame.motion_vectors, frame.depth, working_width, working_height, shared ? &shared->guides : nullptr,
+            frame.motion_vectors->GetDesc().DepthOrArraySize > 1 ? frame.motion_array_slice : 0U,
+            frame.depth->GetDesc().DepthOrArraySize > 1 ? frame.depth_array_slice : 0U))) {
         release_gpu(gpu);
         view.gpu_resources.pop_back();
         return nullptr;
@@ -1078,18 +1084,19 @@ bool evaluate_dlss_nr_internal(
         return false;
     }
     const auto guide_valid = [](ID3D12Resource* resource, std::uint32_t x, std::uint32_t y,
-        std::uint32_t width, std::uint32_t height) noexcept {
+        std::uint32_t width, std::uint32_t height, std::uint32_t slice) noexcept {
         const auto desc = resource->GetDesc();
         return !(desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) &&
-            desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.DepthOrArraySize == 1U &&
+            desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            (desc.DepthOrArraySize == 1U || (slice != UINT32_MAX && slice < desc.DepthOrArraySize)) &&
             desc.SampleDesc.Count == 1U && x <= desc.Width && width <= desc.Width - x &&
             y <= desc.Height && height <= desc.Height - y;
     };
-    if (!guide_valid(frame.depth, frame.depth_base_x, frame.depth_base_y, frame.depth_width, frame.depth_height) ||
-        !guide_valid(frame.motion_vectors, frame.motion_base_x, frame.motion_base_y, frame.motion_width, frame.motion_height)) {
+    if (!guide_valid(frame.depth, frame.depth_base_x, frame.depth_base_y, frame.depth_width, frame.depth_height, frame.depth_array_slice) ||
+        !guide_valid(frame.motion_vectors, frame.motion_base_x, frame.motion_base_y, frame.motion_width, frame.motion_height, frame.motion_array_slice)) {
         diagnostics.state = DlssNrState::unsupported_resources;
         ++diagnostics.failed_calls;
-        trace_rejected_guides("guide-texture-incompatible");
+        trace_rejected_guides("guide-texture-incompatible-or-stereo-slice-unknown");
         return false;
     }
     ID3D12Device* device{};
