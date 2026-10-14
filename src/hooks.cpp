@@ -2948,6 +2948,27 @@ bool streamline_nr_frame(ID3D12GraphicsCommandList* command_list,
     const auto motion_width = resource_width(motion);
     const auto motion_height = resource_height(motion);
     const auto view_id = static_cast<DlssViewId>(evaluation.viewport.value) + 1U;
+    // Correlate Streamline's explicit viewport with native NGX handle/resource
+    // diagnostics. Resource equality is observational, not proof of eye slice.
+    if (depth.resource && motion.resource && depth.resource->native && motion.resource->native) {
+        const auto* d = static_cast<ID3D12Resource*>(depth.resource->native);
+        const auto* m = static_cast<ID3D12Resource*>(motion.resource->native);
+        const auto dd = d->GetDesc();
+        const auto md = m->GetDesc();
+        if (dd.DepthOrArraySize > 1 || md.DepthOrArraySize > 1) {
+            static std::atomic<unsigned> viewport_samples{};
+            const auto sample = viewport_samples.fetch_add(1, std::memory_order_relaxed);
+            if (sample < 16 || sample % 600 == 0) {
+                trace_event("RDRVR-VIMAIN streamline viewport=%llu depth=%p motion=%p depthArray=%u motionArray=%u depthExtent=(%u,%u) motionExtent=(%u,%u) (correlation only)",
+                    static_cast<unsigned long long>(evaluation.viewport.value),
+                    static_cast<void*>(const_cast<ID3D12Resource*>(d)),
+                    static_cast<void*>(const_cast<ID3D12Resource*>(m)),
+                    static_cast<unsigned>(dd.DepthOrArraySize), static_cast<unsigned>(md.DepthOrArraySize),
+                    static_cast<unsigned>(depth.extent.left), static_cast<unsigned>(depth.extent.top),
+                    static_cast<unsigned>(motion.extent.left), static_cast<unsigned>(motion.extent.top));
+            }
+        }
+    }
     frame = DlssNrFrame{
         view_id,
         DlssNrRoute::streamline,
