@@ -4657,6 +4657,25 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
+    // View-instanced stereo resources do not expose their array-slice identity
+    // through the ordinary NGX Depth/MotionVectors pointers. Record the
+    // independent eye observation, but never equate it with a slice without
+    // a verified RDRVR mapping.
+    if (frame.depth && frame.motion_vectors) {
+        const auto depth_desc = frame.depth->GetDesc();
+        const auto motion_desc = frame.motion_vectors->GetDesc();
+        if (depth_desc.DepthOrArraySize > 1 || motion_desc.DepthOrArraySize > 1) {
+            static std::atomic<unsigned> stereo_samples{};
+            const auto sample = stereo_samples.fetch_add(1, std::memory_order_relaxed);
+            if (sample < 12 || sample % 600 == 0) {
+                trace_event("RDRVR-VIMAIN native eye evidence view=%llu afwSourceEye=%u depthArray=%u motionArray=%u depth=%p motion=%p (mapping unverified)",
+                    static_cast<unsigned long long>(frame.view_id), afw_current_source_eye(),
+                    static_cast<unsigned>(depth_desc.DepthOrArraySize),
+                    static_cast<unsigned>(motion_desc.DepthOrArraySize),
+                    static_cast<void*>(frame.depth), static_cast<void*>(frame.motion_vectors));
+            }
+        }
+    }
     return frame;
 }
 
