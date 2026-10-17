@@ -619,6 +619,17 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             text("nvngx_dlssnr.dll: beside the runtime DLL, or beside the running game executable.")
             text("After adding the DLL, use Reset NR history / retry. The log lists paths and loader errors.")
         end
+        if status.nr_pipeline_capture ~= nil and imgui.tree_node("NR pipeline capture (diagnostic)") then
+            text("Raw NR input/output for up to two view chains; not final headset images.")
+            text("Close menus within 10 seconds. Keeps current settings and rendering order.")
+            text("Writes nr-pipeline-captures under the runtime configuration directory.")
+            text("May temporarily stall; do not use this capture as a performance benchmark.")
+            imgui.begin_disabled(status.renderer ~= 1 or status.settings.NrEnabled ~= true)
+            if imgui.button("Capture NR pipeline (10 seconds)") then send("capture_nr_pipeline") end
+            imgui.end_disabled()
+            text(tostring(status.nr_pipeline_capture))
+            imgui.tree_pop()
+        end
         reset_group("Reset DLSS-NR defaults", "nr")
         imgui.tree_pop()
     end

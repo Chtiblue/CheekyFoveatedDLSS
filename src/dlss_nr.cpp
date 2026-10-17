@@ -32,6 +32,7 @@
 #include <deque>
 #include <mutex>
 #include <utility>
+#include "nr_pipeline_capture.inl"
 
 namespace cheeky::foveated_dlss {
 namespace {
@@ -143,6 +144,7 @@ struct GpuResources {
     std::uint32_t working_width{};
     std::uint32_t working_height{};
     std::uint32_t descriptor_size{};
+    std::array<std::uint32_t,48> capture_constants{};
 };
 
 struct CachedFeature {
@@ -756,25 +758,29 @@ void evict_retired_features(ViewState& view) noexcept {
 
 // Only sample an unambiguous floating-point scalar from this device. Unknown
 // tags and unsupported resources are an identity exposure, never a guessed SRV.
-ID3D12Resource* supported_exposure(const DlssNrFrame& frame) noexcept {
+ID3D12Resource* supported_exposure(const DlssNrFrame& frame, const char** reason=nullptr) noexcept {
+    const auto reject=[&](const char* why)->ID3D12Resource* {if(reason)*reason=why;return nullptr;};
+    if(reason)*reason="accepted";
     auto* resource = frame.exposure_texture;
-    if (!resource || !frame.color || static_cast<unsigned>(frame.exposure_state) == 0xFFFFFFFFU) return nullptr;
+    if (!resource) return reject("no supplied texture");
+    if (!frame.color) return reject("no color resource");
+    if (static_cast<unsigned>(frame.exposure_state) == 0xFFFFFFFFU) return reject("unknown resource state");
     const auto d = resource->GetDesc();
     if (d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.Width != 1U || d.Height != 1U ||
         d.DepthOrArraySize != 1U || d.SampleDesc.Count != 1U ||
-        (d.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)) return nullptr;
+        (d.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)) return reject("unsupported shape or deny-SRV flag");
     switch (d.Format) {
     case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32G32_FLOAT:
     case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16G16_FLOAT:
     case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R32G32B32A32_FLOAT: break;
-    default: return nullptr;
+    default: return reject("unsupported float format");
     }
     Microsoft::WRL::ComPtr<ID3D12Device> device, color_device;
     if (FAILED(resource->GetDevice(IID_PPV_ARGS(&device))) ||
-        FAILED(frame.color->GetDevice(IID_PPV_ARGS(&color_device))) || device != color_device) return nullptr;
+        FAILED(frame.color->GetDevice(IID_PPV_ARGS(&color_device))) || device != color_device) return reject("device mismatch or unavailable");
     D3D12_FEATURE_DATA_FORMAT_SUPPORT support{d.Format};
     if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support))) ||
-        !(support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_LOAD)) return nullptr;
+        !(support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_LOAD)) return reject("shader load unsupported");
     return resource;
 }
 
@@ -969,6 +975,8 @@ void dispatch_codec(
         gpu.exposure_texture != nullptr ? 1U : 0U, settings.nr_exposure_multiplier, settings.nr_scaling_domain, {},
     };
     std::memcpy(constants.mask_bounds, region.mask.bounds, sizeof(constants.mask_bounds));
+    static_assert(sizeof(constants)==48*sizeof(std::uint32_t));
+    if(frame.diagnostic_capture) std::memcpy(gpu.capture_constants.data(),&constants,sizeof(constants));
     frame.command_list->SetComputeRoot32BitConstants(2U, sizeof(CodecConstants) / sizeof(std::uint32_t), &constants, 0U);
     const auto dispatch_width = (std::max)(width, gpu.working_width);
     const auto dispatch_height = (std::max)(height, gpu.working_height);
@@ -1463,6 +1471,7 @@ bool evaluate_dlss_nr_internal(
         return false;
     }
 
+    if(allow_second_pass) frame.diagnostic_capture=begin_nr_pixel_chain(frame.view_id);
     transition(
         frame.command_list,
         gpu->neural_output,
@@ -1485,6 +1494,14 @@ bool evaluate_dlss_nr_internal(
         codec_region
     );
     uav_barrier(frame.command_list, frame.color);
+    if(frame.diagnostic_capture) {
+        const char* exposure_reason="accepted";
+        if(!settings.nr_color_pipeline) exposure_reason="disabled by Legacy pipeline";
+        else if(!settings.nr_exposure_mode) exposure_reason="exposure mode Off";
+        else static_cast<void>(supported_exposure(frame,&exposure_reason));
+        record_nr_pixel_pass(frame, settings, codec_region, gpu->original_output,
+            gpu->color_proxy, gpu->neural_output, gpu->exposure_texture, gpu->capture_constants, reset, exposure_reason);
+    }
     transition(
         frame.command_list,
         frame.color,
@@ -1679,6 +1696,7 @@ void collect_dlss_nr_submissions() noexcept {
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
     collect_retired_views();
+    collect_nr_pixel_jobs();
 }
 void skip_dlss_nr_history(const DlssViewId view_id) noexcept {
     std::lock_guard lock(nr_mutex);

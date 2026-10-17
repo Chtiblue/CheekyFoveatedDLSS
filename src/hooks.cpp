@@ -2981,6 +2981,9 @@ bool streamline_nr_frame(ID3D12GraphicsCommandList* command_list,
         false,
     };
     frame.motion_state = static_cast<D3D12_RESOURCE_STATES>(motion.resource->state);
+    frame.exposure_tag_flags=(evaluation.nr_exposure.present ? 1U:0U) |
+        (evaluation.nr_exposure.resource.native ? 2U:0U) |
+        (evaluation.nr_exposure.resource.state != 0xFFFFFFFFU ? 4U:0U);
     if (evaluation.nr_exposure.present && evaluation.nr_exposure.resource.native &&
         evaluation.nr_exposure.resource.state != 0xFFFFFFFFU) {
         frame.exposure_texture = static_cast<ID3D12Resource*>(evaluation.nr_exposure.resource.native);
@@ -4668,7 +4671,8 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
-    frame.exposure_texture = get_d3d12_parameter_resource(parameters, "ExposureTexture");
+    frame.exposure_query_result=parameters->Get("ExposureTexture", &frame.exposure_texture);
+    if(!ngx_succeeded(frame.exposure_query_result)) frame.exposure_texture=nullptr;
     return frame;
 }
 

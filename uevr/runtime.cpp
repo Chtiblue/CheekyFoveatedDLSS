@@ -30,6 +30,7 @@
 #include <sstream>
 #include <charconv>
 #include <chrono>
+#include "nr_pipeline_capture.hpp"
 
 namespace cheeky::foveated_dlss {
 namespace {
@@ -103,6 +104,7 @@ std::string snapshot_locked(State& s) {
         << ",\"renderer\":" << s.renderer << ",\"message\":\"" << json_escape(s.message)
         << "\",\"settings\":" << settings_json(configured_settings())
         << ",\"setting_groups\":" << setting_groups_json()
+        << ",\"nr_pipeline_capture\":\"" << json_escape(nr_pipeline_capture_status()) << "\""
         << ",\"d3d12_lower_hook_active\":" << d3d12_lower_hook_enabled()
         << ",\"d3d12_hook_restart_required\":" << d3d12_hook_restart_required(configured_settings().d3d12_lower_hook)
         << ",\"afw_experiment\":{\"enabled\":" << afw.enabled
@@ -550,6 +552,13 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
         if (parsed.ec != std::errc{} || parsed.ptr != request.data()+request.size()) return false;
         s.request = id;
         if (action == "get") return true;
+        if (action == "capture_nr_pipeline") {
+            if(s.nr_comparison || !configured_settings().nr_enabled || s.renderer!=1) {
+                s.message="Enable D3D12 NR and finish comparison first";return false;
+            }
+            const bool ok=request_nr_pipeline_capture(s.directory / "nr-pipeline-captures");
+            s.message=nr_pipeline_capture_status();return ok;
+        }
         if (action == "nr_comparison_begin") {
             if (s.nr_comparison || s.host != CheekyRuntimeHost::standalone) return false;
             s.nr_comparison_original = configured_settings();

@@ -866,6 +866,12 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         ImGui::TextWrapped("Changes apply when you release a control and are saved automatically.");
         if (!r.message.empty()) ImGui::TextWrapped("%s", r.message.c_str());
         draw_nr_comparison(r, runtime);
+        if (ImGui::CollapsingHeader("NR same-frame pipeline capture")) {
+            ImGui::TextWrapped("One-shot D3D12 diagnostic: original, model input/output and restored pixels for each pass of two view chains. Starts in 10 seconds; close menus. Does not change tuning. Raw files are for analysis, not screenshots.");
+            if (ImGui::Button("Capture NR pipeline (10 seconds)")) command(r, runtime, "capture_nr_pipeline");
+            const auto capture_status=plain(member(r.snapshot,"nr_pipeline_capture"));
+            ImGui::TextWrapped("%s",capture_status.c_str());
+        }
         ImGui::Separator();
         const auto previous = r.draft;
         ImGui::BeginDisabled(nr_capture.active);

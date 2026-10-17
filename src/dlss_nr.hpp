@@ -79,6 +79,9 @@ struct DlssNrFrame {
     // Optional current-view exposure texture; no implicit pre-exposure scalar.
     ID3D12Resource* exposure_texture{};
     D3D12_RESOURCE_STATES exposure_state{D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    std::uint64_t diagnostic_capture{}; // Internal chain token, never game-owned.
+    std::uint32_t exposure_query_result{0xFFFFFFFFU}; // Native NGX result; unknown for other routes.
+    std::uint32_t exposure_tag_flags{}; // Streamline: present/native/known-state bits.
 };
 
 struct DlssNrSnapshot {

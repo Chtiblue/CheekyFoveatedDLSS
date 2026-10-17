@@ -878,6 +878,17 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         require(nr_creates() - nr_releases() <= warm_live,
             "Settings churn accumulated retired NVIDIA features");
     }
+    if(GetEnvironmentVariableW(L"CHEEKY_TEST_NR_CAPTURE",nullptr,0)) {
+        override_nr(model_color.Get());copy_nr_color(true);
+        upload_solid(exposure_texture.Get(),{2.F,0.F,0.F,0.F});
+        f.params.Set("ExposureTexture",exposure_texture.Get());
+        command("1\n980\nset\nNrEnabled=true\nNrFoveated=true\nNrSecondPass=true\nNrThirdPass=false\nNrWorkingScale=1\nNrPass2WorkingScale=1\nNrColorPipeline=1\nNrPass2ColorPipeline=1\nNrExposureMode=1\nNrPass2ExposureMode=1");
+        command("1\n981\ncapture_nr_pipeline");
+        Sleep(10050);
+        for(unsigned i=0;i<5;++i){evaluate(0);Sleep(30);}
+        command("1\n982\nset\nNrSecondPass=false");
+        override_nr(nullptr);copy_nr_color(false);f.params.Set("ExposureTexture",static_cast<ID3D12Resource*>(nullptr));
+    }
     command("1\n96\nset\nNrEnabled=false");
     evaluate(0);
     expect_input(false, 1, "Disabling Before NR did not reset processed history");

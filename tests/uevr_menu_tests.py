@@ -726,7 +726,27 @@ def run(engine):
     count = len(g.sent)
     draw()
     assert g["values"]["Second DLSS 5 pass"] is None and len(g.sent) == count
-    print(engine + ": menu, protocol, drafts, acknowledgements, slider release, reconnect and multipass passed")
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["revision"] += 1
+    state["renderer"] = 1
+    state["settings"]["NrEnabled"] = True
+    state["nr_pipeline_capture"] = "Idle"
+    receive(state)
+    draw(click="Capture NR pipeline (10 seconds)")
+    assert last().endswith("\ncapture_nr_pipeline")
+    assert any(t == "Idle" for t in g.drawn.values())
+    for renderer, nr_enabled in ((0, True), (1, False)):
+        state["renderer"] = renderer
+        state["settings"]["NrEnabled"] = nr_enabled
+        receive(state)
+        count = len(g.sent)
+        draw(click="Capture NR pipeline (10 seconds)")
+        assert len(g.sent) == count, "Unsupported capture command dispatched"
+    del state["nr_pipeline_capture"]
+    receive(state)
+    draw()
+    assert not g.trees["NR pipeline capture (diagnostic)"], "Old runtime showed unsupported capture"
+    print(engine + ": menu, protocol, drafts, acknowledgements, slider release, reconnect, multipass and capture passed")
 
 
 for engine in ("luajit21", "lua54"):
