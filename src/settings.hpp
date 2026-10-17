@@ -9,6 +9,12 @@
 
 namespace cheeky::foveated_dlss {
 
+// RenoDX's supported NR selector is Default/A/B, not the SR preset enum.
+// Unknown legacy values fall back to Default rather than silently selecting B.
+constexpr std::uint32_t normalize_nr_preset(std::uint32_t value) noexcept {
+    return value <= 2U ? value : 0U;
+}
+
 // Up to four requested regions (two eyes, fresh and filtered gaze). Bounds
 // are normalized to the complete eye image, independently of the allocation.
 struct FoveationMask {
@@ -111,6 +117,14 @@ struct Settings {
     float nr_working_scale{1.0F};
     std::uint32_t nr_preset{};
     std::uint32_t nr_style{};
+    std::uint32_t nr_reconstruction{}; // 0 legacy, 1 RGB residual
+    std::uint32_t nr_downsample_filter{}; // 0 bilinear, 1 area
+    std::uint32_t nr_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_color_pipeline{0};
+    std::uint32_t nr_signal_encoding{0};
+    std::uint32_t nr_scaling_domain{2};
+    std::uint32_t nr_exposure_mode{0};
+    float nr_exposure_multiplier{1.0F};
     float nr_intensity{1.0F};
     float nr_local_tone_strength{1.0F};
     float nr_local_structure_strength{1.0F};
@@ -130,6 +144,14 @@ struct Settings {
     float nr_pass2_working_scale{1.0F};
     std::uint32_t nr_pass2_preset{};
     std::uint32_t nr_pass2_style{0U};
+    std::uint32_t nr_pass2_reconstruction{}; // 0 legacy, 1 RGB residual
+    std::uint32_t nr_pass2_downsample_filter{}; // 0 bilinear, 1 area
+    std::uint32_t nr_pass2_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_pass2_color_pipeline{0};
+    std::uint32_t nr_pass2_signal_encoding{0};
+    std::uint32_t nr_pass2_scaling_domain{2};
+    std::uint32_t nr_pass2_exposure_mode{0};
+    float nr_pass2_exposure_multiplier{1.0F};
     float nr_pass2_intensity{1.0F};
     float nr_pass2_local_tone_strength{1.0F};
     float nr_pass2_local_structure_strength{1.0F};
@@ -146,6 +168,14 @@ struct Settings {
     float nr_pass3_working_scale{1.0F};
     std::uint32_t nr_pass3_preset{};
     std::uint32_t nr_pass3_style{0U};
+    std::uint32_t nr_pass3_reconstruction{}; // 0 legacy, 1 RGB residual
+    std::uint32_t nr_pass3_downsample_filter{}; // 0 bilinear, 1 area
+    std::uint32_t nr_pass3_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_pass3_color_pipeline{0};
+    std::uint32_t nr_pass3_signal_encoding{0};
+    std::uint32_t nr_pass3_scaling_domain{2};
+    std::uint32_t nr_pass3_exposure_mode{0};
+    float nr_pass3_exposure_multiplier{1.0F};
     float nr_pass3_intensity{1.0F};
     float nr_pass3_local_tone_strength{1.0F};
     float nr_pass3_local_structure_strength{1.0F};

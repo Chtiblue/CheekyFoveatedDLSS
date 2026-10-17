@@ -129,6 +129,7 @@ struct GpuResources {
     NrLifetime uses;
     std::uint64_t last_use{};
     ID3D12Resource* game_output{};
+    ID3D12Resource* exposure_texture{};
     ID3D12Resource* original_output{};
     ID3D12Resource* color_proxy{};
     ID3D12Resource* neural_output{};
@@ -197,6 +198,7 @@ void release_gpu(GpuResources& gpu) noexcept {
     release(gpu.color_proxy);
     release(gpu.original_output);
     release(gpu.game_output);
+    release(gpu.exposure_texture);
     gpu = {};
 }
 
@@ -277,6 +279,8 @@ void evict_retired_features(ViewState& view) noexcept {
     }
 
     const auto module=load_nr_runtime_module();
+    diagnostics.runtime_path = module.path;
+    diagnostics.runtime_version = module.version;
     runtime.module=module.module;
     const auto& directory=module.directory;
     if(!runtime.module) {
@@ -352,7 +356,8 @@ void evict_retired_features(ViewState& view) noexcept {
     runtime.device = device;
     runtime.device->AddRef();
     runtime.state = 1U;
-    trace_event("DLSS-NR 310.8 feature-18 runtime initialized");
+    trace_event("DLSS-NR feature-18 runtime initialized file_version=%s path=%s",
+        diagnostics.runtime_version.data(), diagnostics.runtime_path.data());
     return true;
 }
 
@@ -614,7 +619,7 @@ void evict_retired_features(ViewState& view) noexcept {
 
     D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap{};
     descriptor_heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    descriptor_heap.NumDescriptors = 8U;
+    descriptor_heap.NumDescriptors = 9U;
     descriptor_heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     result = device->CreateDescriptorHeap(
         &descriptor_heap,
@@ -674,14 +679,17 @@ void evict_retired_features(ViewState& view) noexcept {
         }
         cleanup(); return true;
     }
-    D3D12_DESCRIPTOR_RANGE ranges[2]{};
+    D3D12_DESCRIPTOR_RANGE ranges[3]{};
     ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     ranges[0].NumDescriptors = 3U;
     ranges[0].BaseShaderRegister = 0U;
     ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     ranges[1].NumDescriptors = 2U;
     ranges[1].BaseShaderRegister = 0U;
-    D3D12_ROOT_PARAMETER root_parameters[3]{};
+    ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[2].NumDescriptors = 1U;
+    ranges[2].BaseShaderRegister = 3U;
+    D3D12_ROOT_PARAMETER root_parameters[4]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[0].DescriptorTable.NumDescriptorRanges = 1U;
     root_parameters[0].DescriptorTable.pDescriptorRanges = &ranges[0];
@@ -690,9 +698,12 @@ void evict_retired_features(ViewState& view) noexcept {
     root_parameters[1].DescriptorTable.pDescriptorRanges = &ranges[1];
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     root_parameters[2].Constants.ShaderRegister = 0U;
-    root_parameters[2].Constants.Num32BitValues = 40U;
+    root_parameters[2].Constants.Num32BitValues = sizeof(CodecConstants) / sizeof(std::uint32_t);
+    root_parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[3].DescriptorTable.NumDescriptorRanges = 1U;
+    root_parameters[3].DescriptorTable.pDescriptorRanges = &ranges[2];
     D3D12_ROOT_SIGNATURE_DESC root_desc{};
-    root_desc.NumParameters = 3U;
+    root_desc.NumParameters = 4U;
     root_desc.pParameters = root_parameters;
     result = D3D12SerializeRootSignature(
         &root_desc,
@@ -743,16 +754,58 @@ void evict_retired_features(ViewState& view) noexcept {
     return true;
 }
 
+// Only sample an unambiguous floating-point scalar from this device. Unknown
+// tags and unsupported resources are an identity exposure, never a guessed SRV.
+ID3D12Resource* supported_exposure(const DlssNrFrame& frame) noexcept {
+    auto* resource = frame.exposure_texture;
+    if (!resource || !frame.color || static_cast<unsigned>(frame.exposure_state) == 0xFFFFFFFFU) return nullptr;
+    const auto d = resource->GetDesc();
+    if (d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.Width != 1U || d.Height != 1U ||
+        d.DepthOrArraySize != 1U || d.SampleDesc.Count != 1U ||
+        (d.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)) return nullptr;
+    switch (d.Format) {
+    case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32G32_FLOAT:
+    case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16G16_FLOAT:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R32G32B32A32_FLOAT: break;
+    default: return nullptr;
+    }
+    Microsoft::WRL::ComPtr<ID3D12Device> device, color_device;
+    if (FAILED(resource->GetDevice(IID_PPV_ARGS(&device))) ||
+        FAILED(frame.color->GetDevice(IID_PPV_ARGS(&color_device))) || device != color_device) return nullptr;
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT support{d.Format};
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support))) ||
+        !(support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_LOAD)) return nullptr;
+    return resource;
+}
+
+// Called only at creation or after all prior descriptor users have completed.
+void bind_exposure(ID3D12Device* device, GpuResources& gpu, ID3D12Resource* exposure) noexcept {
+    auto cpu = gpu.descriptors->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += 8U * gpu.descriptor_size;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = exposure ? exposure->GetDesc().Format : DXGI_FORMAT_R32_FLOAT;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1U;
+    device->CreateShaderResourceView(exposure, &srv, cpu);
+    if (exposure) exposure->AddRef();
+    release(gpu.exposure_texture);
+    gpu.exposure_texture = exposure;
+}
+
 [[nodiscard]] GpuResources* find_or_create_gpu(
     ViewState& view,
     const DlssNrFrame& frame,
     const NrRegion& region,
     const std::uint32_t working_width,
     const std::uint32_t working_height,
-    const bool border_only = false
+    const bool border_only = false,
+    const bool use_exposure = false
 ) noexcept {
+    auto* exposure = !border_only && use_exposure ? supported_exposure(frame) : nullptr;
     for (auto& gpu : view.gpu_resources) {
         if (gpu.border_only == border_only && gpu.game_output == frame.color &&
+            gpu.exposure_texture == exposure &&
             (border_only || (gpu.width == region.width && gpu.height == region.height &&
             gpu.working_width == working_width && gpu.working_height == working_height &&
             gpu.guides.source_motion.Get() == frame.motion_vectors &&
@@ -786,6 +839,7 @@ void evict_retired_features(ViewState& view) noexcept {
         cpu.ptr += gpu.descriptor_size;
         device->CreateUnorderedAccessView(frame.color, nullptr, &uav, cpu);
         frame.color->AddRef(); release(gpu.game_output); gpu.game_output = frame.color;
+        bind_exposure(device.Get(), gpu, exposure);
         if (!border_only) gpu.guides.rebind(device.Get(), frame.motion_vectors, frame.depth);
         ++diagnostics.resource_rebinds;
         if (!gpu.uses.record(frame.command_list)) return nullptr;
@@ -835,6 +889,7 @@ void evict_retired_features(ViewState& view) noexcept {
         return nullptr;
     }
     gpu.last_use = ++view.gpu_use_sequence;
+    bind_exposure(incoming.Get(), gpu, exposure);
     if (border_only) ++diagnostics.border_creations; else ++diagnostics.codec_creations;
     return &gpu;
 }
@@ -887,6 +942,9 @@ void dispatch_codec(
     handle.ptr += static_cast<std::uint64_t>(destination_descriptor) *
         gpu.descriptor_size;
     frame.command_list->SetComputeRootDescriptorTable(1U, handle);
+    handle = gpu.descriptors->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += 8ULL * gpu.descriptor_size;
+    frame.command_list->SetComputeRootDescriptorTable(3U, handle);
     const auto width = gpu.border_only ? region.width : gpu.width;
     const auto height = gpu.border_only ? region.height : gpu.height;
     CodecConstants constants{
@@ -905,17 +963,26 @@ void dispatch_codec(
         region.roundness,
         region.transition,
         settings.nr_alignment_border_enabled ? 1U : 0U,
-        region.mask.count, {}, {},
+        region.mask.count, settings.nr_reconstruction,
+        settings.nr_downsample_filter | (settings.nr_upsample_filter << 1U), {},
+        settings.nr_color_pipeline, settings.nr_signal_encoding, settings.nr_exposure_mode,
+        gpu.exposure_texture != nullptr ? 1U : 0U, settings.nr_exposure_multiplier, settings.nr_scaling_domain, {},
     };
     std::memcpy(constants.mask_bounds, region.mask.bounds, sizeof(constants.mask_bounds));
-    frame.command_list->SetComputeRoot32BitConstants(2U, 40U, &constants, 0U);
+    frame.command_list->SetComputeRoot32BitConstants(2U, sizeof(CodecConstants) / sizeof(std::uint32_t), &constants, 0U);
     const auto dispatch_width = (std::max)(width, gpu.working_width);
     const auto dispatch_height = (std::max)(height, gpu.working_height);
+    // Restore the exact supplied state after each codec pass, including decode.
+    // Never modify descriptors here: earlier command lists may still reference them.
+    if (gpu.exposure_texture) transition(frame.command_list, gpu.exposure_texture,
+        frame.exposure_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     frame.command_list->Dispatch(
         (dispatch_width + 15U) / 16U,
         (dispatch_height + 15U) / 16U,
         1U
     );
+    if (gpu.exposure_texture) transition(frame.command_list, gpu.exposure_texture,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, frame.exposure_state);
 }
 
 // Extra DLSS-NR passes use private view IDs for temporal history only.
@@ -973,7 +1040,9 @@ static Settings nr_settings_for_extra_pass(const Settings& base, const unsigned 
         COPY2(working_scale); COPY2(preset); COPY2(style); COPY2(intensity); COPY2(local_tone_strength);
         COPY2(local_structure_strength); COPY2(skin_structure_strength); COPY2(automatic_mask);
         COPY2(ui_correction); COPY2(paper_white_scale); COPY2(hdr_transfer_strength);
-        COPY2(color_strength); COPY2(depth_convention); COPY2(motion_scale_x_multiplier);
+        COPY2(color_strength); COPY2(reconstruction); COPY2(downsample_filter); COPY2(upsample_filter);
+        COPY2(color_pipeline); COPY2(signal_encoding); COPY2(scaling_domain); COPY2(exposure_mode); COPY2(exposure_multiplier);
+        COPY2(depth_convention); COPY2(motion_scale_x_multiplier);
         COPY2(motion_scale_y_multiplier);
 #undef COPY2
     } else {
@@ -981,7 +1050,9 @@ static Settings nr_settings_for_extra_pass(const Settings& base, const unsigned 
         COPY3(working_scale); COPY3(preset); COPY3(style); COPY3(intensity); COPY3(local_tone_strength);
         COPY3(local_structure_strength); COPY3(skin_structure_strength); COPY3(automatic_mask);
         COPY3(ui_correction); COPY3(paper_white_scale); COPY3(hdr_transfer_strength);
-        COPY3(color_strength); COPY3(depth_convention); COPY3(motion_scale_x_multiplier);
+        COPY3(color_strength); COPY3(reconstruction); COPY3(downsample_filter); COPY3(upsample_filter);
+        COPY3(color_pipeline); COPY3(signal_encoding); COPY3(scaling_domain); COPY3(exposure_mode); COPY3(exposure_multiplier);
+        COPY3(depth_convention); COPY3(motion_scale_x_multiplier);
         COPY3(motion_scale_y_multiplier);
 #undef COPY3
     }
@@ -1122,7 +1193,9 @@ bool evaluate_dlss_nr_internal(
         frame,
         codec_region,
         working_width,
-        working_height
+        working_height,
+        false,
+        settings.nr_color_pipeline != 0U && settings.nr_exposure_mode != 0U
     );
     if (gpu == nullptr) return false;
     const auto depth_x = frame.color_is_region
@@ -1451,7 +1524,7 @@ bool evaluate_dlss_nr_internal(
         diagnostics.evaluation_calls % 300U == 0U) {
         trace_event(
             "DLSS-NR active route=%s view=%llu region=%ux%u@%u,%u "
-            "working=%ux%u evaluations=%llu",
+            "working=%ux%u evaluations=%llu colorPipeline=%u signal=%u scalingDomain=%u exposureMode=%u exposureTexture=%s exposureMultiplier=%.4f",
             dlss_nr_route_name(frame.route),
             static_cast<unsigned long long>(frame.view_id),
             region.width,
@@ -1460,7 +1533,10 @@ bool evaluate_dlss_nr_internal(
             region.base_y,
             working_width,
             working_height,
-            static_cast<unsigned long long>(diagnostics.evaluation_calls)
+            static_cast<unsigned long long>(diagnostics.evaluation_calls),
+            settings.nr_color_pipeline, settings.nr_signal_encoding, settings.nr_scaling_domain,
+            settings.nr_exposure_mode, gpu->exposure_texture ? "available" : "identity-fallback",
+            settings.nr_exposure_multiplier
         );
     }
     } // Release NR execution locks before starting the independent second pass.

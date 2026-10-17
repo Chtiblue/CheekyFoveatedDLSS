@@ -44,6 +44,9 @@ struct PeripheralDlaaRequest {
     float motion_vector_scale_y{1.0F};
     bool depth_inverted{};
     bool reset{};
+    bool startup_recovery_eligible{};
+    std::uint64_t startup_recovery_session{};
+    unsigned startup_recovery_eye{};
     std::uint32_t create_flags{};
     NgxParameters* parameters{};
     D3D12BackendCallbacks callbacks{};

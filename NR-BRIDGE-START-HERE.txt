@@ -1,0 +1,127 @@
+Cheeky 0.5.5 - NR bridge preview 1 (2026-10-17)
+Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
+
+UPGRADE PACKAGES, NOT FRESH INSTALLERS
+====================================
+Close the game before updating. Back up the files you replace and your settings.
+These packages assume an existing working Cheeky installation. They contain no
+loader, OpenXR installer, NVIDIA DLSS DLL, UEVR backend, OFXR or VR port. Keep
+your existing loader and working OpenXR layer; do not install another layer or
+register anything for this update. Do not install both the plugin and addon.
+
+UEVR upgrade
+------------
+Extract the UEVR-Upgrade ZIP into the game's profile:
+  %APPDATA%\UnrealVRMod\<game-executable-name>\
+Replace these files together, retaining the directory layout:
+  plugins\CheekyFoveatedDLSS.dll
+  plugins\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll
+  scripts\cheeky_foveated_dlss.lua
+For an existing global installation, update its original location instead.
+Do not add a second copy. Keep existing settings, cheeky.txt and nvngx_dlssnr.dll.
+Launch normally and inject UEVR. Open LuaLoader -> Cheeky Foveated DLSS -> DLSS-NR.
+UEVR plugin API 2.39.0 or compatible newer 2.x is required by this adapter.
+Do not enable Native Stereo Fix as part of this update; no stereo mode changes
+are required. Native Stereo Fix caused eye mismatch in the tested SHf setup.
+
+Standalone / Cyberpunk upgrade
+------------------------------
+Extract the Standalone-Upgrade ZIP alongside the GAME executable, merging its
+CheekyFoveatedDLSS folder. Replace Host.dll and Runtime.dll together. Do not
+replace your dxgi.dll, version.dll, ASI loader, NVIDIA DLLs or INI. Open your
+existing Cheeky menu key (F11 in our Cyberpunk installation; upstream default F8).
+
+WHAT CHANGED
+============
+- Per-pass color bridge with smooth HDR compression/restoration, using original
+  source brightness to restore the edited signal instead of hard clipping.
+- Signal encoding and resampling-domain choices: sRGB, PQ and linear.
+- Optional RGB residual reconstruction, added in the bridge domain when the
+  new color path is selected; legacy source-space reconstruction remains.
+- Optional area downsampling and clamped bicubic upsampling.
+- D3D12 game-exposure texture support, with multiply/divide/off controls and
+  safe identity fallback for missing or unsupported exposure resources.
+- NR preset normalization and actual loaded NVIDIA NR DLL path/version reporting.
+- Existing shared gaze compatibility and per-session peripheral startup recovery.
+
+ENABLE / COMPARE
+================
+Upgrading DOES NOT change settings or automatically enable NR or extra passes.
+In each enabled NR pass, select:
+  NR color pipeline: Linear BT.709 bridge
+  NR signal encoding: sRGB
+  NR scaling domain: Linear
+  NR exposure texture: Multiply
+  NR exposure multiplier: 1.0
+Use this for the native DLSS linear BT.709 input path. An HDR display by itself
+does not mean the source is PQ or scRGB. Do not select sRGB source just because
+the display is SDR. Retain your working paper white, model and strengths.
+
+Second/third pass each have their OWN color and filter controls. If you prefer
+two passes, keep exactly two enabled and set both deliberately. Before/after
+upscaling placement is unchanged. Additional passes cost GPU time.
+
+Try RGB residual separately, particularly at reduced NR working scale. Start
+with bilinear filters to isolate the color change, then compare area/bicubic.
+For a clean A/B, change only ColorPipeline between Legacy and Linear BT.709 on
+each active pass. Do not change FOV, DLSS-SR mode, working scale or strengths at
+the same time. To compare NR-off, disable the main NR feature, not just its mask.
+
+INI equivalents, when editing with the game CLOSED:
+  NrColorPipeline=1
+  NrSignalEncoding=0
+  NrScalingDomain=2
+  NrExposureMode=1
+  NrExposureMultiplier=1
+Use NrPass2 / NrPass3 instead of Nr for the other passes. Optional fields:
+  Reconstruction=0 direct/legacy; 1 RGB residual
+  DownsampleFilter=0 bilinear; 1 area
+  UpsampleFilter=0 bilinear; 1 clamped bicubic
+Legacy color pipeline remains the default (0). No example INI overwrites tuning.
+
+VERIFY AND LIMITS
+================
+Check successful NR evaluations increasing, not merely a loaded DLL or border.
+Disabled NR can leave the last diagnostic state labelled Active; the evaluation
+counter stops. Successful log summaries identify colorPipeline and exposureTexture.
+identity-fallback means texture-driven exposure is not being exercised, not that
+the whole NR effect is disabled. Counters are cumulative across passes/views.
+
+This is NOT full RenoDX parity. Exact cubic filtering, additional gamut paths and
+temporal jitter equivalence remain unverified. D3D11 transport and Vulkan do not
+carry this new game-exposure texture; Vulkan's new color modes lack a dedicated
+pixel oracle. D3D12 is the primary validation path. No performance or appearance
+improvement is promised: Cyberpunk captures confirmed execution and increased
+cost, but did not establish a clear Legacy/new quality gain beyond scene drift.
+
+Standalone contains an optional seven-stage two-pass mirror comparison UI.
+It requires the separate cpvr_fov_image_audit.exe helper and nr-capture-openvr.txt
+pointing to SteamVR's openvr_api.dll beside the Host DLL. The helper is NOT bundled
+or required for rendering; this feature is currently for the configured Cyberpunk
+test installation, not UEVR. Without it the test refuses to start safely.
+It captures current / NR-off / Legacy / mixed passes / new / current-repeat.
+Close both menus and hold camera/gaze still. Ten seconds settling per stage;
+about 90 seconds total. Prefer frame generation off. Saved settings are preserved.
+Output: CheekyFoveatedDLSS\nr-captures. These are sequential COMPOSITED mirrors,
+not raw NR inputs, simultaneous eyes, or a GPU benchmark. Black overlays, head
+movement and scene animation invalidate comparisons; inspect current-repeat first.
+
+ROLLBACK
+========
+For a rendering A/B select Legacy on all enabled passes. For full rollback,
+close the game and restore ALL backed-up package files and your settings. No
+registry/layer cleanup is needed for this upgrade. Do not replace DLLs live.
+
+BUILD / VALIDATION
+==================
+Source is the release tag on satyaloka93/CheekyFoveatedDLSS. From that source,
+scripts/build.ps1 builds Release; scripts/package-nr-upgrade.ps1 creates these
+upgrade packages and checks ZIP payload hashes. Dependencies are in third_party.
+No proprietary NR/SR library is redistributed; keep your legitimately obtained
+working NVIDIA files. Tested Cyberpunk NR library: 310.9.16.0; installed UEVR
+libraries are retained, not silently upgraded by this package.
+
+Release validation: native NR processing, UEVR ABI/settings/persistence, actual
+standalone DX12 and Streamline fixtures, Vulkan regression, overlay UI, generic
+runtime transient controls and Lua menu tests. Mock-model shader tests do not
+establish real-model quality. UEVR headset validation of this update is pending.

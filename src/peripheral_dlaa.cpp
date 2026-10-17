@@ -4,6 +4,7 @@
 #include "d3d_shaders.hpp"
 #include "motion_region.hpp"
 #include "rr_contract.hpp"
+#include "peripheral_recovery.hpp"
 
 #include "runtime.hpp"
 
@@ -71,6 +72,8 @@ struct PeripheralGpuUse {
 };
 
 struct PeripheralViewState {
+    PeripheralStartupRecovery recovery{};
+    DetachedD3D12Feature retired_feature{};
     DlssViewId view_id{};
     ID3D12Device* device{};
     ID3D12Resource* output{};
@@ -118,6 +121,8 @@ void record_gpu_use(
 }
 
 void release_state(PeripheralViewState& state) noexcept {
+    if (state.retired_feature.handle && state.retired_feature.release)
+        static_cast<void>(state.retired_feature.release(state.retired_feature.handle));
     for (auto& use : state.gpu_uses) release_gpu_use(use);
     for (auto& resource : state.rr_textures) release(resource);
     release(state.rr_pipeline);
@@ -330,15 +335,28 @@ void release_state(PeripheralViewState& state) noexcept {
             state.depth_format == depth_format &&
             state.output_format == output_desc.Format &&
             state.motion_format == motion_format;
-        if (compatible) {
+        const bool rebuild = state.recovery.begin(request.startup_recovery_eligible,
+            request.startup_recovery_session, request.startup_recovery_eye,
+            request.preset, request.create_flags, compatible);
+        if (compatible && !rebuild) {
             device->Release();
             record_gpu_use(state, request.command_list);
             return &state;
         }
         // Recorded command lists do not retain the resources referenced by
         // their descriptors. Keep the old generation until its queues finish.
+        const auto recovery = state.recovery;
+        state.retired_feature = detach_d3d12_feature(peripheral_dlaa_view_id(state.view_id));
+        if (rebuild)
+            trace_event("PERIPHERAL UEVR STARTUP REBUILD view=%llu eye=%u session=%llu "
+                "size=%ux%u scale=%.9g successful_evals=%u pending_gpu_uses=%zu",
+                static_cast<unsigned long long>(state.view_id), request.startup_recovery_eye,
+                static_cast<unsigned long long>(request.startup_recovery_session),
+                dimensions.width, dimensions.height, request.scale,
+                recovery.successes, state.gpu_uses.size());
         retired_states.push_back(std::move(state));
         state = {};
+        state.recovery = recovery;
         state.view_id = request.view_id;
         state.device = device;
         state.render_width = request.render_width;
@@ -365,6 +383,9 @@ void release_state(PeripheralViewState& state) noexcept {
     state.depth_format = depth_format;
     state.output_format = output_desc.Format;
     state.motion_format = motion_format;
+    static_cast<void>(state.recovery.begin(request.startup_recovery_eligible,
+        request.startup_recovery_session, request.startup_recovery_eye,
+        request.preset, request.create_flags, true));
     record_gpu_use(state, request.command_list);
     return &state;
 }
@@ -792,12 +813,20 @@ bool evaluate_peripheral_dlaa_ngx(
     NgxResult& result,
     D3D12BackendTiming* const timing
 ) noexcept {
+    const auto completed = [&](bool success) {
+        std::lock_guard lock(state_mutex);
+        for (auto& state : states) if (state.view_id == request.view_id) {
+            state.recovery.completed(success);
+            break;
+        }
+    };
     result = 0xBAD00005U;
     if (request.parameters == nullptr ||
         request.callbacks.create_feature == nullptr ||
         request.callbacks.evaluate_feature == nullptr ||
         request.callbacks.release_feature == nullptr ||
         !prepare_peripheral_dlaa_resources(request, resources)) {
+        completed(false);
         return false;
     }
 
@@ -945,6 +974,7 @@ bool evaluate_peripheral_dlaa_ngx(
     request.parameters->Set("Jitter.Offset.X", saved_jitter_x);
     request.parameters->Set("Jitter.Offset.Y", saved_jitter_y);
 
+    completed(ngx_succeeded(result));
     if (!ngx_succeeded(result)) {
         finish_peripheral_dlaa_motion_read(request.command_list, resources);
         if (resources.output_restore_state !=
@@ -1031,6 +1061,7 @@ void release_peripheral_dlaa_view(const DlssViewId view_id) noexcept {
         std::lock_guard lock(state_mutex);
         for (auto iterator = states.begin(); iterator != states.end(); ++iterator) {
             if (iterator->view_id != view_id) continue;
+            iterator->retired_feature = detach_d3d12_feature(peripheral_dlaa_view_id(view_id));
             retired_states.push_back(std::move(*iterator));
             states.erase(iterator);
             break;

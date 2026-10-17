@@ -487,7 +487,29 @@ def run(engine):
     assert g["values"]["NR intensity"] is not None
     assert g.slider_ranges["NR intensity"][1] == 0 and g.slider_ranges["NR intensity"][2] == 1
     assert g["values"]["Skin structure"] is None, "Hide skin tuning without automatic masking"
-    assert g["values"]["DLSS-NR preset"] is None and g["values"]["UI correction"] is None
+    assert set(g.combos["DLSS-NR preset"].keys()) == {0, 1, 2}
+    assert g.combos["DLSS-NR preset"][2] == "Preset B"
+    assert g.combos["NR reconstruction"][0] == "Legacy"
+    assert g.combos["NR reconstruction"][1] == "RGB residual (experimental)"
+    assert g.combos["NR downsample filter"][1] == "Area (experimental)"
+    assert g.combos["NR upsample filter"][1] == "Bicubic clamped (experimental)"
+    for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
+        assert set(g.combos[label].keys()) == {0, 1, 2}, label
+    assert g.combos["NR color pipeline"][0] == "Legacy"
+    assert g.slider_ranges["NR exposure multiplier"][1] == 0.01
+    assert g.slider_ranges["NR exposure multiplier"][2] == 10
+    state["nr_details"].update(runtime_version="310.9.16.0", runtime_path="C:\\NR test\\nvngx_dlssnr.dll")
+    receive(state)
+    draw()
+    assert any("310.9.16.0" in t for t in g.drawn.values())
+    assert any("C:\\NR test\\nvngx_dlssnr.dll" in t for t in g.drawn.values())
+    draw(changes={"DLSS-NR preset": 2})
+    assert "NrPreset=2" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrPreset"] = 2
+    receive(state)
+    draw()
+    assert g["values"]["UI correction"] is None
     state["nr_details"]["hdr_input"] = False
     receive(state)
     draw()
@@ -662,7 +684,49 @@ def run(engine):
     draw()
     assert g["values"]["DX11 -> DX12 transport"] is None
     assert g["values"]["Enable DLSS-NR"] is True
-    print(engine + ": menu, protocol, drafts, acknowledgements, slider release and reconnect passed")
+    state["settings"].update(NrFoveated=True, NrSecondPass=False, NrThirdPass=False)
+    receive(state)
+    draw(changes={"Second DLSS 5 pass": True})
+    assert "NrSecondPass=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrSecondPass"] = True
+    receive(state)
+    draw(changes={"Third DLSS 5 pass": True})
+    assert "NrThirdPass=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrThirdPass"] = True
+    receive(state)
+    draw(changes={"Intensity##NrPass2": 0.42})
+    for pass_number in (2, 3):
+        options = g.combos[f"DLSS-NR preset##NrPass{pass_number}"]
+        assert set(options.keys()) == {0, 1, 2}
+        assert options[0] == "Default" and options[1] == "Preset A"
+        assert set(g.combos[f"NR reconstruction##NrPass{pass_number}"].keys()) == {0, 1}
+        assert set(g.combos[f"NR downsample filter##NrPass{pass_number}"].keys()) == {0, 1}
+        assert set(g.combos[f"NR upsample filter##NrPass{pass_number}"].keys()) == {0, 1}
+        for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
+            assert set(g.combos[f"{label}##NrPass{pass_number}"].keys()) == {0, 1, 2}
+        assert g.slider_ranges[f"NR exposure multiplier##NrPass{pass_number}"][1] == 0.01
+        assert g.slider_ranges[f"NR exposure multiplier##NrPass{pass_number}"][2] == 10
+    assert "NrPass2Intensity=0.42" in last() and "NrPass3Intensity=" not in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrPass2Intensity"] = 0.42
+    receive(state)
+    draw()
+    assert g["values"]["Intensity##NrPass2"] == 0.42
+    assert g["values"]["Intensity##NrPass3"] == state["settings"]["NrPass3Intensity"]
+    draw(changes={"Second DLSS 5 pass": False})
+    assert "NrSecondPass=false" in last() and "NrThirdPass=false" in last()
+    assert g["values"]["Third DLSS 5 pass"] is None
+    # Reconnect to an older runtime must discard unsupported pending edits.
+    old = copy.deepcopy(state)
+    old["settings"] = {k: v for k, v in old["settings"].items()
+                       if not k.startswith(("NrPass2", "NrPass3")) and k not in ("NrSecondPass", "NrThirdPass")}
+    receive(old)
+    count = len(g.sent)
+    draw()
+    assert g["values"]["Second DLSS 5 pass"] is None and len(g.sent) == count
+    print(engine + ": menu, protocol, drafts, acknowledgements, slider release, reconnect and multipass passed")
 
 
 for engine in ("luajit21", "lua54"):

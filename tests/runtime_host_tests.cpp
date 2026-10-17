@@ -809,6 +809,19 @@ int main(int argc, char** argv) {
         }
         void* device = dx11 ? static_cast<void*>(device11.Get()) : static_cast<void*>(device12.Get());
         tick(attachment, input.renderer, device, queue.Get());
+        if (!uevr && !optiscaler) {
+            const auto before = snapshot(get);
+            const auto old_pipeline = field(before, "NrColorPipeline");
+            require(command(attachment, "1\n900\nnr_comparison_begin\n"), "Begin transient NR comparison");
+            require(!command(attachment, "1\n901\nnr_comparison_begin\n"), "Reject nested comparison");
+            require(command(attachment, "1\n902\nnr_comparison_set\nNrEnabled=false\nNrSecondPass=false\nNrThirdPass=false\nNrColorPipeline=1\nNrPass2ColorPipeline=0"), "Apply NR-off comparison stage");
+            require(contains(snapshot(get), "\"NrEnabled\":false"), "Comparison stage really applied");
+            require(!command(attachment, "1\n903\nset\nWidth=0.1"), "Block normal edits during comparison");
+            require(!command(attachment, "1\n904\nnr_comparison_set\nWidth=0.1"), "Reject unrelated transient setting");
+            require(command(attachment, "1\n905\nnr_comparison_end\n"), "Restore comparison settings");
+            require(field(snapshot(get), "NrColorPipeline") == old_pipeline, "Restore original color pipeline");
+            require(!command(attachment, "1\n906\nnr_comparison_set\nNrEnabled=false"), "Reject unarmed comparison stage");
+        }
         text = snapshot(get);
         require(contains(text, "\"ready\":true") && contains(text, "\"processing\":true"), "Discovered graphics enables processing");
         if (!dx11) require(contains(text, "\"observer\":{\"ready\":true"), "Native D3D12 submission observer installed");

@@ -44,6 +44,9 @@ foreach ($job in $jobs) {
     if (-not $match.Success) { throw "Cannot extract $($job.Header)" }
     $source = Join-Path $out "$($job.Name).hlsl"
     $shader = $match.Groups[1].Value
+    if ($job.Header -eq 'src\nr_codec_shader.hpp') {
+        $shader="#define CHEEKY_NR_NO_EXPOSURE 1`n"+$shader
+    }
     if($job.Prefix) {
         $prefix=Get-Content -LiteralPath (Join-Path $root $job.Prefix) -Raw
         $shader="#define CHEEKY_COLOR_MODE $($job.Mode)`n"+[regex]::Match($prefix,'(?s)R"\((.*?)\)";').Groups[1].Value+$shader
