@@ -11,6 +11,7 @@ namespace cheeky::foveated_dlss {
 struct NrGuidePass {
     template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
     Ptr<ID3D12Resource> source_motion, source_depth, motion, depth;
+    unsigned source_motion_slice{UINT32_MAX}, source_depth_slice{UINT32_MAX};
     Ptr<ID3D12DescriptorHeap> heap;
     Ptr<ID3D12RootSignature> root;
     Ptr<ID3D12PipelineState> pipeline;
@@ -27,8 +28,8 @@ struct NrGuidePass {
         default: return f;
         }
     }
-    bool initialize(ID3D12Resource* mv, ID3D12Resource* z, unsigned w, unsigned h, const NrGuidePass* shared = nullptr) {
-        source_motion=mv; source_depth=z;
+    bool initialize(ID3D12Resource* mv, ID3D12Resource* z, unsigned w, unsigned h, const NrGuidePass* shared = nullptr, unsigned mv_slice = UINT32_MAX, unsigned z_slice = UINT32_MAX) {
+        source_motion=mv; source_depth=z; source_motion_slice=mv_slice; source_depth_slice=z_slice;
         Ptr<ID3D12Device> device;
         if (FAILED(mv->GetDevice(IID_PPV_ARGS(&device)))) return false;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -42,9 +43,15 @@ struct NrGuidePass {
         D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors=4; hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)))) return false;
         auto cpu=heap->GetCPUDescriptorHandleForHeapStart(); auto step=device->GetDescriptorHandleIncrementSize(hd.Type);
-        for (auto* source : {mv,z}) {
+        for (unsigned index=0; index<2; ++index) {
+            auto* source = index == 0 ? mv : z;
+            const auto slice = index == 0 ? mv_slice : z_slice;
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format=readable(source->GetDesc().Format);
-            sd.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D; sd.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels=1;
+            sd.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            if (source->GetDesc().DepthOrArraySize > 1) {
+                sd.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                sd.Texture2DArray.MipLevels=1; sd.Texture2DArray.FirstArraySlice=slice; sd.Texture2DArray.ArraySize=1;
+            } else { sd.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D; sd.Texture2D.MipLevels=1; }
             device->CreateShaderResourceView(source,&sd,cpu); cpu.ptr+=step;
         }
         for (auto* target : {motion.Get(),depth.Get()}) {
@@ -66,18 +73,22 @@ struct NrGuidePass {
         return SUCCEEDED(device->CreateComputePipelineState(&pd,IID_PPV_ARGS(&pipeline)));
     }
     // Caller must prove all recordings using this heap have completed.
-    void rebind(ID3D12Device* device, ID3D12Resource* mv, ID3D12Resource* z) {
+    void rebind(ID3D12Device* device, ID3D12Resource* mv, ID3D12Resource* z, unsigned mv_slice = UINT32_MAX, unsigned z_slice = UINT32_MAX) {
         auto cpu = heap->GetCPUDescriptorHandleForHeapStart();
         const auto step = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        for (auto* source : {mv, z}) {
+        for (unsigned index=0; index<2; ++index) {
+            auto* source = index == 0 ? mv : z;
+            const auto slice = index == 0 ? mv_slice : z_slice;
             D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
             desc.Format = readable(source->GetDesc().Format);
-            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            desc.Texture2D.MipLevels = 1;
+            if (source->GetDesc().DepthOrArraySize > 1) {
+                desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                desc.Texture2DArray.MipLevels=1; desc.Texture2DArray.FirstArraySlice=slice; desc.Texture2DArray.ArraySize=1;
+            } else { desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; desc.Texture2D.MipLevels=1; }
             device->CreateShaderResourceView(source, &desc, cpu); cpu.ptr += step;
         }
-        source_motion = mv; source_depth = z;
+        source_motion = mv; source_depth = z; source_motion_slice=mv_slice; source_depth_slice=z_slice;
     }
     void dispatch(ID3D12GraphicsCommandList* list, const NrGuideConstants& c,
         D3D12_RESOURCE_STATES mv_state, D3D12_RESOURCE_STATES depth_state) {
