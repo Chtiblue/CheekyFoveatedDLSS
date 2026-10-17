@@ -1,5 +1,7 @@
 # Cheeky Foveated DLSS
 
+> **Version base (this fork): Cheeky Foveated DLSS v0.5.5.** This development branch builds on the upstream `e016dc7` commit (`Bump version to v0.5.5 and reorganize UI`) and adds experimental Triple DLSS5 / NR changes. This describes the **source branch**, not a verified version or commit of any separately distributed DLL.
+
 Reduce the cost of DLSS Super Resolution by concentrating it on the center of the image. Available as a **UEVR plugin**, or **standalone integration**, for Vulkan, Direct3D 11 and Direct3D 12 games. With DLSS Performance FPS gains of 20%+ are standard, even more with eye tracked headsets which can make the foveated region even smaller.
 
 This also supports foveating DLSS Neural Resolution (DLSS5), including running it pre-upscale and at lower resolutions (improves performance at a cost of quality).
