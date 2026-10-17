@@ -4671,6 +4671,46 @@ NgxResult hook_core_create_d3d12(
     frame.jitter_uv_y = dlss_nr_ngx_motion_uv_scale(get_d3d12_parameter_float(parameters, "Jitter.Offset.Y", 0.0F), input_height);
     frame.motion_vectors_jittered = (flags & (1U << 2U)) != 0U;
     frame.view_output_base_x = frame.color_base_x; frame.view_output_base_y = frame.color_base_y;
+    // Per-installation opt-in. Default off for CP77 and other games.
+    // Resolve relative to this DLL, not the process working directory.
+    static const bool stereo_array_slices_enabled = []() noexcept {
+        HMODULE module{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(&native_nr_frame), &module)) return false;
+        wchar_t path[MAX_PATH]{};
+        const DWORD n = GetModuleFileNameW(module, path, MAX_PATH);
+        if (!n || n >= MAX_PATH) return false;
+        wchar_t* slash = wcsrchr(path, L'\\');
+        if (!slash) return false;
+        constexpr wchar_t filename[] = L"CheekyStereo.ini";
+        if (static_cast<std::size_t>(slash - path) + (sizeof(filename)/sizeof(wchar_t)) >= MAX_PATH) return false;
+        wcscpy_s(slash + 1, MAX_PATH - static_cast<std::size_t>(slash + 1 - path), filename);
+        return GetPrivateProfileIntW(L"Stereo", L"StereoArraySlices", 0, path) == 1;
+    }();
+    if (stereo_array_slices_enabled && frame.depth && frame.motion_vectors) {
+        const auto depth_desc = frame.depth->GetDesc();
+        const auto motion_desc = frame.motion_vectors->GetDesc();
+        if (depth_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            motion_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            depth_desc.DepthOrArraySize == 2 && motion_desc.DepthOrArraySize == 2) {
+            static std::mutex stereo_mutex;
+            static DlssViewId handles[2]{};
+            unsigned eye = 2;
+            {
+                std::lock_guard lock(stereo_mutex);
+                if (handles[0] == frame.view_id) eye = 0;
+                else if (handles[1] == frame.view_id) eye = 1;
+                else if (!handles[0]) { handles[0] = frame.view_id; eye = 0; }
+                else if (!handles[1]) { handles[1] = frame.view_id; eye = 1; }
+            }
+            if (eye < 2) {
+                frame.depth_array_slice = eye;
+                frame.motion_array_slice = eye;
+            }
+        }
+    }
+
     frame.exposure_query_result=parameters->Get("ExposureTexture", &frame.exposure_texture);
     if(!ngx_succeeded(frame.exposure_query_result)) frame.exposure_texture=nullptr;
     return frame;
