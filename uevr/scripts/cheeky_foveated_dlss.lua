@@ -7,6 +7,22 @@ local request, pending_apply, frame = 0, nil, 0
 local error_text = nil
 local last_snapshot_frame = 0
 local ready_edits, slider_edits = {}, {}
+local optional_keys = {"FixMotionBlur", "NrProcessingOrder", "AfwManualCoverage", "AfwAutomaticCoverage", "AfwWarpMargin", "EyeCalibrationContinuous", "EyeCalibrationMethod", "NrSecondPass", "NrThirdPass"}
+optional_keys[#optional_keys + 1] = "NrReconstruction"
+optional_keys[#optional_keys + 1] = "NrPass2Reconstruction"
+optional_keys[#optional_keys + 1] = "NrPass3Reconstruction"
+for _, prefix in ipairs({"Nr", "NrPass2", "NrPass3"}) do
+    optional_keys[#optional_keys + 1] = prefix .. "DownsampleFilter"
+    optional_keys[#optional_keys + 1] = prefix .. "UpsampleFilter"
+    for _, suffix in ipairs({"ColorPipeline", "SignalEncoding", "ScalingDomain", "ExposureMode", "ExposureMultiplier"}) do
+        optional_keys[#optional_keys + 1] = prefix .. suffix
+    end
+end
+for pass = 2, 3 do
+    for _, suffix in ipairs({"WorkingScale", "Preset", "Style", "Intensity", "LocalToneStrength", "LocalStructureStrength", "SkinStructureStrength", "AutomaticMask", "UiCorrection", "PaperWhiteScale", "HdrTransferStrength", "ColorStrength", "DepthConvention", "MotionScaleXMultiplier", "MotionScaleYMultiplier"}) do
+        optional_keys[#optional_keys + 1] = "NrPass" .. pass .. suffix
+    end
+end
 
 local load_event = "cheeky.foveated_dlss.load.v1"
 local load_state_event = "cheeky.foveated_dlss.load_state.v1"
@@ -85,7 +101,7 @@ uevr.sdk.callbacks.on_lua_event(function(event, text)
     status = value
     -- A reconnect can reach an older runtime. Drop unsupported optional drafts
     -- before automatic flush or Apply can resend them to that runtime.
-    for _, key in ipairs({"FixMotionBlur", "NrProcessingOrder", "AfwManualCoverage", "AfwAutomaticCoverage", "AfwWarpMargin", "EyeCalibrationContinuous", "EyeCalibrationMethod"}) do
+    for _, key in ipairs(optional_keys) do
         if value.settings[key] == nil then
             draft[key], dirty[key] = nil, nil
             ready_edits[key], slider_edits[key] = nil, nil
@@ -150,6 +166,50 @@ local function combo(label, key, values)
     if changed then draft[key], dirty[key], ready_edits[key] = value, value, value end
 end
 local function text(s) imgui.text(tostring(s)) end
+local function extra_nr_pass(pass)
+    local prefix = "NrPass" .. pass
+    local id = "##" .. prefix
+    if not imgui.tree_node("DLSS5 Pass " .. pass .. " - Settings") then return end
+    local function scale(label, suffix, lo, hi)
+        if status.settings[prefix .. suffix] ~= nil then slider(label .. id, prefix .. suffix, lo, hi) end
+    end
+    local function toggle(label, suffix)
+        if status.settings[prefix .. suffix] ~= nil then check(label .. id, prefix .. suffix) end
+    end
+    local function choice(label, suffix, options)
+        if status.settings[prefix .. suffix] ~= nil then combo(label .. id, prefix .. suffix, options) end
+    end
+    scale("Working scale", "WorkingScale", 0.1, 1)
+    choice("DLSS-NR preset", "Preset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+    choice("DLSS-NR style", "Style", {[0]="Standard",[1]="Natural",[2]="Cinematic"})
+    choice("NR reconstruction", "Reconstruction", {[0]="Legacy",[1]="RGB residual (experimental)"})
+    choice("NR color pipeline", "ColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
+    choice("NR signal encoding", "SignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
+    choice("NR scaling domain", "ScalingDomain", {[0]="sRGB",[1]="PQ",[2]="Linear"})
+    choice("NR exposure texture", "ExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
+    -- Exposure multiplier is optional for compatibility with older runtimes.
+    if status.settings[prefix .. "ExposureMultiplier"] ~= nil then
+        slider("NR exposure multiplier##" .. prefix, prefix .. "ExposureMultiplier", 0.01, 10)
+    end
+    choice("NR downsample filter", "DownsampleFilter", {[0]="Bilinear (default)",[1]="Area (experimental)"})
+    choice("NR upsample filter", "UpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)"})
+    scale("Intensity", "Intensity", 0, 1)
+    if imgui.tree_node("Advanced neural rendering" .. id) then
+        scale("Local tone", "LocalToneStrength", 0, 2)
+        scale("Local structure", "LocalStructureStrength", 0, 2)
+        toggle("Automatic mask", "AutomaticMask")
+        if draft[prefix .. "AutomaticMask"] then scale("Skin structure", "SkinStructureStrength", 0, 2) end
+        toggle("UI correction", "UiCorrection")
+        scale("Paper white", "PaperWhiteScale", 0.01, 8)
+        scale("Transfer strength", "HdrTransferStrength", 0, 2)
+        scale("Color strength", "ColorStrength", 0, 2)
+        choice("Depth convention", "DepthConvention", {[0]="Game/default",[1]="Normal",[2]="Reversed"})
+        scale("Motion scale X", "MotionScaleXMultiplier", -4, 4)
+        scale("Motion scale Y", "MotionScaleYMultiplier", -4, 4)
+        imgui.tree_pop()
+    end
+    imgui.tree_pop()
+end
 local function apply_buttons(id)
     if imgui.button("Apply changes##" .. id) then
         if next(dirty) and not pending_apply then
@@ -468,6 +528,11 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
     end
 
     if imgui.tree_node("DLSS-NR (experimental)") then
+        local nr = status.nr_details or {}
+        text("NR runtime state: " .. tostring(status.nr or "Unavailable"))
+        text("NR DLL version: " .. ((nr.runtime_version and nr.runtime_version ~= "") and nr.runtime_version or "Not reported yet"))
+        text("NR DLL path: " .. ((nr.runtime_path and nr.runtime_path ~= "") and nr.runtime_path or "Not reported yet"))
+        text("Identity appears after NR loads; it does not confirm successful evaluations.")
         if status.renderer == 0 then
             check("DX11 -> DX12 transport", "D3D11D3D12Transport")
             text("DLSS-NR on DX11 requires DX12 transport.")
@@ -478,6 +543,19 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             if draft.NrEnabled then
                 check("Foveated NR", "NrFoveated")
                 if draft.NrFoveated then
+                    if status.settings.NrSecondPass ~= nil then
+                        local was_second = draft.NrSecondPass
+                        check("Second DLSS 5 pass", "NrSecondPass")
+                        if was_second and not draft.NrSecondPass and status.settings.NrThirdPass ~= nil then
+                            draft.NrThirdPass, dirty.NrThirdPass, ready_edits.NrThirdPass = false, false, false
+                        end
+                        if draft.NrSecondPass then
+                            if status.settings.NrThirdPass ~= nil then check("Third DLSS 5 pass", "NrThirdPass") end
+                            extra_nr_pass(2)
+                            if draft.NrThirdPass then extra_nr_pass(3) end
+                        end
+                        text("Additional passes increase GPU work; each has independent settings.")
+                    end
                     text("Uses Stereo and gaze settings, even with SR disabled.")
                     check("Use SR size and shape", "NrUseSrFoveation")
                     if not draft.NrUseSrFoveation then
@@ -496,7 +574,27 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     text("Rendering order: Unavailable in this runtime")
                 end
                 slider("NR working scale", "NrWorkingScale", 0.1, 1)
+                if status.settings.NrPreset ~= nil then
+                    combo("DLSS-NR preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+                end
+                text("NR presets are separate from SR E/J/K/L/M and Frame Generation A/B/C.")
                 combo("DLSS-NR style", "NrStyle", {[0]="Standard",[1]="Natural",[2]="Cinematic"})
+                if status.settings.NrReconstruction ~= nil then
+                    combo("NR reconstruction", "NrReconstruction", {[0]="Legacy",[1]="RGB residual (experimental)"})
+                    text("Residual transfers NR's color change to the original detail; not an antialiasing fix.")
+                end
+                if status.settings.NrDownsampleFilter ~= nil then
+                    combo("NR downsample filter", "NrDownsampleFilter", {[0]="Bilinear (default)",[1]="Area (experimental)"})
+                    combo("NR upsample filter", "NrUpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)"})
+                end
+                if status.settings.NrColorPipeline ~= nil then
+                    combo("NR color pipeline", "NrColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
+                    combo("NR signal encoding", "NrSignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
+                    combo("NR scaling domain", "NrScalingDomain", {[0]="sRGB",[1]="PQ",[2]="Linear"})
+                    combo("NR exposure texture", "NrExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
+                    slider("NR exposure multiplier", "NrExposureMultiplier", 0.01, 10)
+                    text("Bridge modes: native DLSS linear BT.709 or explicit sRGB; texture exposure is DX12 only.")
+                end
                 slider("NR intensity", "NrIntensity", 0, 1)
                 text("Intensity: 0 = no model edit, 1 = full model edit.")
                 if imgui.tree_node("Advanced NR") then
@@ -520,6 +618,17 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             if imgui.button("Reset NR history / retry") then send("reset_nr") end
             text("nvngx_dlssnr.dll: beside the runtime DLL, or beside the running game executable.")
             text("After adding the DLL, use Reset NR history / retry. The log lists paths and loader errors.")
+        end
+        if status.nr_pipeline_capture ~= nil and imgui.tree_node("NR pipeline capture (diagnostic)") then
+            text("Raw NR input/output for up to two view chains; not final headset images.")
+            text("Close menus within 10 seconds. Keeps current settings and rendering order.")
+            text("Writes nr-pipeline-captures under the runtime configuration directory.")
+            text("May temporarily stall; do not use this capture as a performance benchmark.")
+            imgui.begin_disabled(status.renderer ~= 1 or status.settings.NrEnabled ~= true)
+            if imgui.button("Capture NR pipeline (10 seconds)") then send("capture_nr_pipeline") end
+            imgui.end_disabled()
+            text(tostring(status.nr_pipeline_capture))
+            imgui.tree_pop()
         end
         reset_group("Reset DLSS-NR defaults", "nr")
         imgui.tree_pop()

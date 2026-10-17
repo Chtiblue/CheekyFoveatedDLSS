@@ -74,7 +74,7 @@ foreach ($proxy in @('reshade','streamline')) {
 }
 
 $testExecutable = Join-Path $projectRoot "bin\$Configuration\CheekyTests.exe"
-foreach ($gazeMode in @('--manual-gaze', '--openxr-independent-on', '--openxr-independent-off')) {
+foreach ($gazeMode in @('--cyberpunk-shared-gaze', '--manual-gaze', '--openxr-independent-on', '--openxr-independent-off')) {
     & $testExecutable $gazeMode
     if ($LASTEXITCODE -ne 0) { throw "Gaze compatibility regression failed: $gazeMode" }
 }
@@ -128,6 +128,8 @@ foreach ($mode in @("native", "native-c", "streamline", "missing-lower", "public
 }
 
 $runtimeHostTest = Join-Path $projectRoot "bin\$Configuration\CheekyRuntimeHostTests.exe"
+& $runtimeHostTest --calibration-disabled
+if ($LASTEXITCODE -ne 0) { throw "Calibration startup opt-out test failed." }
 foreach ($arguments in @(@(), @('--dx11'), @('--optiscaler'), @('--optiscaler','--dx11'), @('--conflict'), @('--transport'), @('--uevr','--transport'), @('--transport-init-failure'), @('--transport-release-drain'), @('--optiscaler','--transport'), @('--transport-forwarded'), @('--optiscaler','--transport-forwarded'))) {
     & $runtimeHostTest @arguments
     if ($LASTEXITCODE -ne 0) { throw "Generic runtime tests failed: $arguments" }

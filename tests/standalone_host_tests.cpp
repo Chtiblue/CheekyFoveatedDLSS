@@ -37,6 +37,8 @@ std::string snapshot(CheekyHostSnapshotFn get) {
 int main(int argc,char** argv) {
     try {
         const std::string mode=argc>1 ? argv[1] : "dx12";
+        const bool pipeline_capture=mode=="dx12-capture";
+        if(pipeline_capture) SetEnvironmentVariableW(L"CHEEKY_TEST_NR_CAPTURE",L"1");
         const bool dx11=mode.find("dx11")!=std::string::npos;
         const bool realvr=mode.starts_with("realvr-");
         const bool chained_table=mode.find("method-chain")!=std::string::npos;
@@ -104,6 +106,23 @@ int main(int argc,char** argv) {
         Sleep(300);
         if(realvr) verify_realvr_test(get,command);
         else verify_late_attach_test(get,command,frame);
+        if(pipeline_capture) {
+            unsigned metadata_count{};
+            for(unsigned i=0;i<100 && metadata_count<2;++i){
+                frame();Sleep(25);metadata_count=0;
+                for(const auto& entry:std::filesystem::recursive_directory_iterator(root/"nr-pipeline-captures"))
+                    if(entry.path().filename()=="capture.json") ++metadata_count;
+            }
+            require(metadata_count==2,"Same-invocation capture saved both NR passes");
+            for(const auto& entry:std::filesystem::recursive_directory_iterator(root/"nr-pipeline-captures"))
+                if(entry.path().filename()=="capture.json") {
+                    const auto dir=entry.path().parent_path();
+                    require(std::filesystem::file_size(dir/"codec-constants.bin")==192,"Exact codec constants saved");
+                    for(const char* name:{"original.bin","proxy.bin","neural.bin","restored.bin"})
+                        require(std::filesystem::file_size(dir/name)>0,"Raw capture plane saved");
+                }
+            puts("PASS: same-invocation raw capture and shader constants for two NR passes");
+        }
         check(chain->ResizeBuffers(2,400,300,DXGI_FORMAT_UNKNOWN,0),"Resize without retained backbuffers"); frame();
         ComPtr<IDXGISwapChain3> chain3;
         if (!dx11 && SUCCEEDED(chain.As(&chain3))) {

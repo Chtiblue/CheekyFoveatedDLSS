@@ -13,6 +13,9 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
 void report_openxr_menu_diagnostic(const char*) noexcept;
 namespace cheeky::standalone {
 using namespace cheeky::foveated_dlss;
@@ -106,6 +109,8 @@ bool command(OverlayUiState& r, const OverlayRuntime& runtime, std::string_view 
     return result;
 }
 
+#include "nr_comparison.inl"
+
 template<class T> auto scalar(T value) {
     if constexpr (std::is_enum_v<T>) return static_cast<std::uint32_t>(value);
     else return value;
@@ -189,7 +194,9 @@ void draw_sr(Settings& s, bool rr) {
 }
 
 void draw_gaze(Settings& s) {
-    combo("Foveation center", s.center_mode, "Fixed\0Runtime gaze (OpenXR / OpenVR / LibOVR)\0Simulated gaze\0");
+    combo("Foveation center", s.center_mode, "Fixed\0Runtime gaze (OpenXR / OpenVR / LibOVR)\0Simulated gaze\0Shared right-eye gaze (Cyberpunk compatibility)\0");
+    if (s.center_mode == FoveationCenterMode::openxr_gaze_right_eye)
+        ImGui::TextWrapped("Uses right-eye gaze for BOTH render views, corrected into the game camera. Does not require eye-texture calibration. Eye-order inversion is not used. A fresh render projection is required.");
     ImGui::Checkbox("Automatic stereo alignment", &s.auto_stereo_alignment);
     if (s.center_mode == FoveationCenterMode::openxr_gaze)
         ImGui::TextWrapped("Runtime gaze needs the Cheeky OpenXR layer or a supported OpenVR runtime. Fixed placement is used when tracking is unavailable.");
@@ -240,6 +247,7 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         float& working = second ? s.nr_pass2_working_scale : s.nr_pass3_working_scale;
         std::uint32_t& preset_value = second ? s.nr_pass2_preset : s.nr_pass3_preset;
         std::uint32_t& style = second ? s.nr_pass2_style : s.nr_pass3_style;
+        std::uint32_t& reconstruction = second ? s.nr_pass2_reconstruction : s.nr_pass3_reconstruction;
         float& intensity = second ? s.nr_pass2_intensity : s.nr_pass3_intensity;
         float& tone = second ? s.nr_pass2_local_tone_strength : s.nr_pass3_local_tone_strength;
         float& structure = second ? s.nr_pass2_local_structure_strength : s.nr_pass3_local_structure_strength;
@@ -253,8 +261,16 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         float& motion_x = second ? s.nr_pass2_motion_scale_x_multiplier : s.nr_pass3_motion_scale_x_multiplier;
         float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
         slider("Working scale", working, .1F, 1.0F);
-        preset("DLSS-NR preset", preset_value, true);
+        combo("DLSS-NR preset", preset_value, "Default\0Preset A\0Preset B\0");
         combo("DLSS-NR style", style, "Standard\0Natural\0Cinematic\0");
+        combo("NR reconstruction", reconstruction, "Legacy\0RGB residual (experimental)\0");
+        combo("NR color pipeline", second ? s.nr_pass2_color_pipeline : s.nr_pass3_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
+        combo("NR signal encoding", second ? s.nr_pass2_signal_encoding : s.nr_pass3_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
+        combo("NR scaling domain", second ? s.nr_pass2_scaling_domain : s.nr_pass3_scaling_domain, "sRGB\0PQ\0Linear\0");
+        combo("NR exposure texture", second ? s.nr_pass2_exposure_mode : s.nr_pass3_exposure_mode, "Off\0Multiply\0Divide\0");
+        slider("NR exposure multiplier", second ? s.nr_pass2_exposure_multiplier : s.nr_pass3_exposure_multiplier, .01F, 10.F);
+        combo("NR downsample filter", second ? s.nr_pass2_downsample_filter : s.nr_pass3_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
+        combo("NR upsample filter", second ? s.nr_pass2_upsample_filter : s.nr_pass3_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0");
         slider("Intensity", intensity, 0.0F, 1.0F);
         if (ImGui::TreeNode("Advanced neural rendering")) {
             slider("Local tone strength", tone, 0.0F, 2.0F);
@@ -304,7 +320,20 @@ void draw_nr(Settings& s) {
     ImGui::SeparatorText("DLSS5 Pass 1 - Settings");
     combo("Rendering order", s.nr_processing_order, "After upscaling\0Before upscaling (experimental)\0");
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
+    combo("DLSS-NR preset", s.nr_preset, "Default\0Preset A\0Preset B\0");
+    ImGui::TextWrapped("NR presets are separate from SR presets E/J/K/L/M. Legacy unsupported NR selections fall back to Default.");
     combo("DLSS-NR style", s.nr_style, "Standard\0Natural\0Cinematic\0");
+    combo("NR reconstruction", s.nr_reconstruction, "Legacy\0RGB residual (experimental)\0");
+    combo("NR color pipeline", s.nr_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
+    combo("NR signal encoding", s.nr_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
+    combo("NR scaling domain", s.nr_scaling_domain, "sRGB\0PQ\0Linear\0");
+    combo("NR exposure texture", s.nr_exposure_mode, "Off\0Multiply\0Divide\0");
+    slider("NR exposure multiplier", s.nr_exposure_multiplier, .01F, 10.F);
+    ImGui::TextWrapped("Linear BT.709 bridge follows RenoDX's native DLSS input assumption and smooth HDR compression. sRGB is an explicit source override; Legacy preserves previous behavior. Signal/exposure controls apply only to bridge modes. Exposure texture support is DX12 only; missing/invalid texture uses 1. Paper white scale 1 = 100 nits. HDR10/scRGB gamut parity is not implemented.");
+    combo("NR downsample filter", s.nr_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
+    combo("NR upsample filter", s.nr_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0");
+    ImGui::TextWrapped("Experimental filters change NR resizing, not DLSS-SR. Area averages the source footprint; bicubic sharpens reconstruction with halo limiting. More texture reads; no extra NR pass. At exactly half scale, area can match bilinear.");
+    ImGui::TextWrapped("RGB residual applies NR's color change to the original-resolution image, retaining detail at reduced working scale. Not an antialiasing or performance fix. Legacy preserves existing behavior.");
     slider("Intensity", s.nr_intensity, 0.0F, 1.0F);
     if (ImGui::TreeNode("Advanced neural rendering")) {
         slider("Local tone strength", s.nr_local_tone_strength, 0.0F, 2.0F);
@@ -368,7 +397,7 @@ double number(std::string_view object, const char* key) {
 bool flag(std::string_view object, const char* key) { return member(object, key) == "true"; }
 
 const char* gaze_warning(const Settings& s, std::string_view snapshot) {
-    if (s.center_mode != FoveationCenterMode::openxr_gaze ||
+    if ((s.center_mode != FoveationCenterMode::openxr_gaze && s.center_mode != FoveationCenterMode::openxr_gaze_right_eye) ||
         (!s.enabled && !(s.nr_enabled && s.nr_foveated))) return nullptr;
     const auto gaze = member(snapshot, "gaze");
     if (gaze.empty()) return "Waiting for eye-tracking diagnostics.";
@@ -379,6 +408,14 @@ const char* gaze_warning(const Settings& s, std::string_view snapshot) {
     if (flags & CHEEKY_GAZE_STATUS_UNSUPPORTED_VIEW_CONFIG) return "Eye tracking unavailable for this stereo layout. Using fixed placement.";
     if (!(flags & CHEEKY_GAZE_STATUS_SESSION_FOCUSED)) return "VR session is not focused. Using fixed fallback.";
     if (!(flags & CHEEKY_GAZE_STATUS_GAZE_VALID)) return "No valid eye-tracking signal. Using fixed fallback.";
+    if (s.center_mode == FoveationCenterMode::openxr_gaze_right_eye) {
+        if (!flag(gaze, "shared_projection")) return "Shared gaze: waiting for valid headset and game-camera projections.";
+        if (!flag(gaze, "shared_fresh")) return "Shared gaze: no fresh sample; holding briefly or returning to fixed placement.";
+        if (number(gaze, "shared_recent_views") < 2 ||
+            number(gaze, "shared_tracking_views") < number(gaze, "shared_recent_views"))
+            return "Shared gaze is not tracking BOTH render views. See per-view diagnostics.";
+        return nullptr;
+    }
     if (!flag(gaze, "using_gaze")) {
         if (flag(gaze, "ambiguous")) return "Eye mapping is ambiguous. Waiting for a reliable left/right eye assignment.";
         return "Waiting for a fresh eye-tracking sample or stable eye mapping.";
@@ -429,6 +466,9 @@ void draw_gaze_status(const Settings& s, std::string_view snapshot) {
         ImGui::TextUnformatted("Eye Tracking Ready: No");
         warning(reason);
     } else ImGui::TextUnformatted("Eye Tracking Ready: Yes");
+    if (s.center_mode == FoveationCenterMode::openxr_gaze_right_eye)
+        ImGui::TextWrapped("Shared gaze: %.0f / %.0f recent render views tracking (not calibrated eye mapping).",
+            number(gaze, "shared_tracking_views"), number(gaze, "shared_recent_views"));
     ImGui::TextWrapped("Latest alignment: %s", alignment_name(static_cast<unsigned>(number(gaze, "alignment"))));
     warning(alignment_warning(s, snapshot));
 }
@@ -442,6 +482,11 @@ void draw_gaze_details(std::string_view snapshot) {
         diagnostic_line(gaze, "Mapping ambiguity", "ambiguous");
         diagnostic_line(gaze, "Active stereo views", "views");
         diagnostic_line(gaze, "Sample age (ms)", "age_ms");
+        diagnostic_line(gaze, "Shared gaze mode", "shared_gaze");
+        diagnostic_line(gaze, "Shared gaze fresh", "shared_fresh");
+        diagnostic_line(gaze, "Shared render projection", "shared_projection");
+        diagnostic_line(gaze, "Latest shared DLSS view", "shared_view");
+        diagnostic_line(gaze, "Shared gaze evaluations", "shared_evaluations");
         const auto flags = static_cast<unsigned>(number(gaze, "status_flags"));
         for (const auto& item : {std::pair{"System supports eye tracking", CHEEKY_GAZE_STATUS_SYSTEM_SUPPORTED},
                  {"Session focused", CHEEKY_GAZE_STATUS_SESSION_FOCUSED},
@@ -820,8 +865,16 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             runtime.host_name ? runtime.host_name : "Standalone", renderer, key_name.c_str());
         ImGui::TextWrapped("Changes apply when you release a control and are saved automatically.");
         if (!r.message.empty()) ImGui::TextWrapped("%s", r.message.c_str());
+        draw_nr_comparison(r, runtime);
+        if (ImGui::CollapsingHeader("NR same-frame pipeline capture")) {
+            ImGui::TextWrapped("One-shot D3D12 diagnostic: original, model input/output and restored pixels for each pass of two view chains. Starts in 10 seconds; close menus. Does not change tuning. Raw files are for analysis, not screenshots.");
+            if (ImGui::Button("Capture NR pipeline (10 seconds)")) command(r, runtime, "capture_nr_pipeline");
+            const auto capture_status=plain(member(r.snapshot,"nr_pipeline_capture"));
+            ImGui::TextWrapped("%s",capture_status.c_str());
+        }
         ImGui::Separator();
         const auto previous = r.draft;
+        ImGui::BeginDisabled(nr_capture.active);
         if (ImGui::BeginTabBar("controls")) {
             if (begin_tab("General")) {
                 ImGui::SeparatorText("Menu");
@@ -877,6 +930,9 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             }
             if (begin_tab("DLSS-NR")) {
                 diagnostic_line(r.snapshot, "Runtime state", "nr");
+                diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL version", "runtime_version");
+                diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL path", "runtime_path");
+                ImGui::TextWrapped("DLL identity appears after the first NR load attempt. Loaded does not mean evaluating; check the evaluation counter below.");
                 if (r.draft.nr_enabled) {
                     const auto reason = plain(member(member(r.snapshot, "nr_details"), "skip_reason"));
                     if (!reason.empty()) warning(reason.c_str());
@@ -927,7 +983,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         }
         // Geometry/model controls can allocate expensive GPU resources. Keep a
         // local draft during dragging; commit only after the active edit ends.
-        if (!ImGui::IsAnyItemActive()) {
+        if (!nr_capture.active && !ImGui::IsAnyItemActive()) {
             Settings configured = previous;
             const auto current = member(r.snapshot, "settings");
 #define CHEEKY_SETTING(name, field) { const auto value = member(current, name); if (!value.empty()) set_named_setting(configured, name, value); }
@@ -935,6 +991,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
 #undef CHEEKY_SETTING
             commit(r, runtime, configured);
         }
+        ImGui::EndDisabled();
     }
     const auto position = ImGui::GetWindowPos();
     const auto size = ImGui::GetWindowSize();
