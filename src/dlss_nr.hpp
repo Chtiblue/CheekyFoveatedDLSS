@@ -82,6 +82,9 @@ struct DlssNrFrame {
     std::uint64_t diagnostic_capture{}; // Internal chain token, never game-owned.
     std::uint32_t exposure_query_result{0xFFFFFFFFU}; // Native NGX result; unknown for other routes.
     std::uint32_t exposure_tag_flags{}; // Streamline: present/native/known-state bits.
+    // Optional explicitly selected stereo array slices; UINT32_MAX means unknown.
+    std::uint32_t depth_array_slice{UINT32_MAX};
+    std::uint32_t motion_array_slice{UINT32_MAX};
 };
 
 struct DlssNrSnapshot {
