@@ -812,14 +812,20 @@ int main(int argc, char** argv) {
         if (!uevr && !optiscaler) {
             const auto before = snapshot(get);
             const auto old_pipeline = field(before, "NrColorPipeline");
+            const auto old_order = field(before, "NrProcessingOrder");
+            const auto old_preset = field(before, "NrPreset");
+            const auto old_preset2 = field(before, "NrPass2Preset");
             require(command(attachment, "1\n900\nnr_comparison_begin\n"), "Begin transient NR comparison");
             require(!command(attachment, "1\n901\nnr_comparison_begin\n"), "Reject nested comparison");
             require(command(attachment, "1\n902\nnr_comparison_set\nNrEnabled=false\nNrSecondPass=false\nNrThirdPass=false\nNrColorPipeline=1\nNrPass2ColorPipeline=0"), "Apply NR-off comparison stage");
             require(contains(snapshot(get), "\"NrEnabled\":false"), "Comparison stage really applied");
             require(!command(attachment, "1\n903\nset\nWidth=0.1"), "Block normal edits during comparison");
             require(!command(attachment, "1\n904\nnr_comparison_set\nWidth=0.1"), "Reject unrelated transient setting");
+            require(command(attachment, "1\n9041\nnr_comparison_set\nNrProcessingOrder=0\nNrPreset=2\nNrPass2Preset=2\nNrPass3Preset=2"), "Apply after-upscaling all-pass network benchmark");
+            require(field(snapshot(get), "NrPreset") == 2 && field(snapshot(get), "NrPass2Preset") == 2, "Both pass presets applied");
             require(command(attachment, "1\n905\nnr_comparison_end\n"), "Restore comparison settings");
             require(field(snapshot(get), "NrColorPipeline") == old_pipeline, "Restore original color pipeline");
+            require(field(snapshot(get), "NrProcessingOrder") == old_order && field(snapshot(get), "NrPreset") == old_preset && field(snapshot(get), "NrPass2Preset") == old_preset2, "Restore benchmark order and per-pass presets");
             require(!command(attachment, "1\n906\nnr_comparison_set\nNrEnabled=false"), "Reject unarmed comparison stage");
         }
         text = snapshot(get);

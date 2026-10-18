@@ -166,6 +166,45 @@ local function combo(label, key, values)
     if changed then draft[key], dirty[key], ready_edits[key] = value, value, value end
 end
 local function text(s) imgui.text(tostring(s)) end
+local function nr_choice(label, key, names)
+    if status.settings[key] == nil then return end
+    text(label)
+    for i = 0, 2 do
+        if i > 0 then imgui.same_line() end
+        local selected = draft[key] == i
+        local caption = (selected and "[x] " or "[ ] ") .. names[i] .. "##" .. key .. "_" .. i
+        if imgui.button(caption) and not selected then
+            draft[key], dirty[key], ready_edits[key] = i, i, i
+        end
+    end
+end
+local function selection_help(message)
+    -- Short wrapped lines also work with older UEVR Lua bindings.
+    local line = ""
+    for word in message:gmatch("%S+") do
+        if #line + #word + 1 > 68 then text(line); line = "" end
+        line = line == "" and word or (line .. " " .. word)
+    end
+    if line ~= "" then text(line) end
+end
+local function network_help(value)
+    local descriptions = {
+        [0] = "Default: DLL chooses the network; reported as B in 310.9.16. This does not select appearance Model A or C.",
+        [1] = "Preset A: older, larger NR network in 310.9.16; generally slower than B. Independent of appearance Model A/B/C.",
+        [2] = "Preset B: newer, smaller/faster NR network in 310.9.16. Actual speed and image quality depend on your setup.",
+    }
+    selection_help(descriptions[value] or descriptions[0])
+    selection_help("Version-specific: 310.8.0 had one network. Patched DLL behavior is not verified here.")
+end
+local function appearance_help(value)
+    local descriptions = {
+        [0] = "Model A: RenoDX baseline appearance (Style=0; formerly Standard). Not NR off or network Preset A.",
+        [1] = "Model B: RenoDX appearance B (Style=1; formerly Natural). Not the newer/faster network Preset B.",
+        [2] = "Model C: RenoDX appearance C (Style=2; formerly Cinematic). Not a newer network generation.",
+    }
+    selection_help(descriptions[value] or descriptions[0])
+    selection_help("Changes neural conditioning and associated grading. A/B/C are not speed or quality rankings.")
+end
 local function extra_nr_pass(pass)
     local prefix = "NrPass" .. pass
     local id = "##" .. prefix
@@ -180,8 +219,10 @@ local function extra_nr_pass(pass)
         if status.settings[prefix .. suffix] ~= nil then combo(label .. id, prefix .. suffix, options) end
     end
     scale("Working scale", "WorkingScale", 0.1, 1)
-    choice("DLSS-NR preset", "Preset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
-    choice("DLSS-NR style", "Style", {[0]="Standard",[1]="Natural",[2]="Cinematic"})
+    nr_choice("NR network preset", prefix .. "Preset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+    network_help(draft[prefix .. "Preset"])
+    nr_choice("NR appearance mode", prefix .. "Style", {[0]="Model A",[1]="Model B",[2]="Model C"})
+    appearance_help(draft[prefix .. "Style"])
     choice("NR reconstruction", "Reconstruction", {[0]="Legacy",[1]="RGB residual (experimental)"})
     choice("NR color pipeline", "ColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
     choice("NR signal encoding", "SignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
@@ -192,7 +233,8 @@ local function extra_nr_pass(pass)
         slider("NR exposure multiplier##" .. prefix, prefix .. "ExposureMultiplier", 0.01, 10)
     end
     choice("NR downsample filter", "DownsampleFilter", {[0]="Bilinear (default)",[1]="Area (experimental)"})
-    choice("NR upsample filter", "UpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)"})
+    choice("NR upsample filter", "UpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)",[2]="RenoDX-style cubic (unclamped)"})
+    text("Unclamped cubic may ring/overshoot; compare at reduced NR working scale.")
     scale("Intensity", "Intensity", 0, 1)
     if imgui.tree_node("Advanced neural rendering" .. id) then
         scale("Local tone", "LocalToneStrength", 0, 2)
@@ -574,18 +616,18 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     text("Rendering order: Unavailable in this runtime")
                 end
                 slider("NR working scale", "NrWorkingScale", 0.1, 1)
-                if status.settings.NrPreset ~= nil then
-                    combo("DLSS-NR preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
-                end
-                text("NR presets are separate from SR E/J/K/L/M and Frame Generation A/B/C.")
-                combo("DLSS-NR style", "NrStyle", {[0]="Standard",[1]="Natural",[2]="Cinematic"})
+                nr_choice("NR network preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+                network_help(draft.NrPreset)
+                nr_choice("NR appearance mode", "NrStyle", {[0]="Model A",[1]="Model B",[2]="Model C"})
+                appearance_help(draft.NrStyle)
                 if status.settings.NrReconstruction ~= nil then
                     combo("NR reconstruction", "NrReconstruction", {[0]="Legacy",[1]="RGB residual (experimental)"})
                     text("Residual transfers NR's color change to the original detail; not an antialiasing fix.")
                 end
                 if status.settings.NrDownsampleFilter ~= nil then
                     combo("NR downsample filter", "NrDownsampleFilter", {[0]="Bilinear (default)",[1]="Area (experimental)"})
-                    combo("NR upsample filter", "NrUpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)"})
+                    combo("NR upsample filter", "NrUpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)",[2]="RenoDX-style cubic (unclamped)"})
+                    text("Unclamped cubic may ring/overshoot; compare at reduced NR working scale.")
                 end
                 if status.settings.NrColorPipeline ~= nil then
                     combo("NR color pipeline", "NrColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})

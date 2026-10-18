@@ -1,5 +1,6 @@
 #include "overlay_ui.hpp"
 #include "settings_io.hpp"
+#include "../src/nr_selection_help.hpp"
 #include "version.h"
 #include "cheeky_gaze_abi.h"
 #include <imgui.h>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <set>
 void report_openxr_menu_diagnostic(const char*) noexcept;
 namespace cheeky::standalone {
 using namespace cheeky::foveated_dlss;
@@ -110,6 +112,7 @@ bool command(OverlayUiState& r, const OverlayRuntime& runtime, std::string_view 
 }
 
 #include "nr_comparison.inl"
+#include "nr_benchmark.inl"
 
 template<class T> auto scalar(T value) {
     if constexpr (std::is_enum_v<T>) return static_cast<std::uint32_t>(value);
@@ -139,6 +142,23 @@ template<class T> void combo(const char* label, T& value, const char* names) {
     ImGui::TextUnformatted(label);
     ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##value", &index, names)) value = static_cast<T>(index);
+    ImGui::PopID();
+}
+
+void nr_choice(const char* label, std::uint32_t& value, bool network) {
+    const char* names_network[]{"Default", "Preset A", "Preset B"};
+    const char* names_appearance[]{"Model A", "Model B", "Model C"};
+    const auto names = network ? names_network : names_appearance;
+    ImGui::PushID(label);
+    ImGui::TextUnformatted(label);
+    const float width = std::max(1.0F, (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3);
+    for (std::uint32_t i = 0; i < 3; ++i) {
+        if (i) ImGui::SameLine();
+        const bool selected = value == i;
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(names[i], ImVec2(width, 0))) value = i;
+        if (selected) ImGui::PopStyleColor();
+    }
     ImGui::PopID();
 }
 
@@ -261,8 +281,11 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         float& motion_x = second ? s.nr_pass2_motion_scale_x_multiplier : s.nr_pass3_motion_scale_x_multiplier;
         float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
         slider("Working scale", working, .1F, 1.0F);
-        combo("DLSS-NR preset", preset_value, "Default\0Preset A\0Preset B\0");
-        combo("DLSS-NR style", style, "Standard\0Natural\0Cinematic\0");
+        nr_choice("NR network preset", preset_value, true);
+        ImGui::TextWrapped("%s", nr_network_help(preset_value));
+        ImGui::TextWrapped("%s", nr_network_version_help);
+        nr_choice("NR appearance mode", style, false);
+        ImGui::TextWrapped("%s", nr_appearance_help(style));
         combo("NR reconstruction", reconstruction, "Legacy\0RGB residual (experimental)\0");
         combo("NR color pipeline", second ? s.nr_pass2_color_pipeline : s.nr_pass3_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
         combo("NR signal encoding", second ? s.nr_pass2_signal_encoding : s.nr_pass3_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
@@ -270,7 +293,7 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         combo("NR exposure texture", second ? s.nr_pass2_exposure_mode : s.nr_pass3_exposure_mode, "Off\0Multiply\0Divide\0");
         slider("NR exposure multiplier", second ? s.nr_pass2_exposure_multiplier : s.nr_pass3_exposure_multiplier, .01F, 10.F);
         combo("NR downsample filter", second ? s.nr_pass2_downsample_filter : s.nr_pass3_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
-        combo("NR upsample filter", second ? s.nr_pass2_upsample_filter : s.nr_pass3_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0");
+        combo("NR upsample filter", second ? s.nr_pass2_upsample_filter : s.nr_pass3_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0RenoDX-style cubic (unclamped)\0");
         slider("Intensity", intensity, 0.0F, 1.0F);
         if (ImGui::TreeNode("Advanced neural rendering")) {
             slider("Local tone strength", tone, 0.0F, 2.0F);
@@ -320,9 +343,11 @@ void draw_nr(Settings& s) {
     ImGui::SeparatorText("DLSS5 Pass 1 - Settings");
     combo("Rendering order", s.nr_processing_order, "After upscaling\0Before upscaling (experimental)\0");
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
-    combo("DLSS-NR preset", s.nr_preset, "Default\0Preset A\0Preset B\0");
-    ImGui::TextWrapped("NR presets are separate from SR presets E/J/K/L/M. Legacy unsupported NR selections fall back to Default.");
-    combo("DLSS-NR style", s.nr_style, "Standard\0Natural\0Cinematic\0");
+    nr_choice("NR network preset", s.nr_preset, true);
+    ImGui::TextWrapped("%s", nr_network_help(s.nr_preset));
+    ImGui::TextWrapped("%s", nr_network_version_help);
+    nr_choice("NR appearance mode", s.nr_style, false);
+    ImGui::TextWrapped("%s", nr_appearance_help(s.nr_style));
     combo("NR reconstruction", s.nr_reconstruction, "Legacy\0RGB residual (experimental)\0");
     combo("NR color pipeline", s.nr_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
     combo("NR signal encoding", s.nr_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
@@ -331,8 +356,8 @@ void draw_nr(Settings& s) {
     slider("NR exposure multiplier", s.nr_exposure_multiplier, .01F, 10.F);
     ImGui::TextWrapped("Linear BT.709 bridge follows RenoDX's native DLSS input assumption and smooth HDR compression. sRGB is an explicit source override; Legacy preserves previous behavior. Signal/exposure controls apply only to bridge modes. Exposure texture support is DX12 only; missing/invalid texture uses 1. Paper white scale 1 = 100 nits. HDR10/scRGB gamut parity is not implemented.");
     combo("NR downsample filter", s.nr_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
-    combo("NR upsample filter", s.nr_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0");
-    ImGui::TextWrapped("Experimental filters change NR resizing, not DLSS-SR. Area averages the source footprint; bicubic sharpens reconstruction with halo limiting. More texture reads; no extra NR pass. At exactly half scale, area can match bilinear.");
+    combo("NR upsample filter", s.nr_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0RenoDX-style cubic (unclamped)\0");
+    ImGui::TextWrapped("Filters change NR resizing, not DLSS-SR. Area averages the source footprint. Clamped cubic limits halos; RenoDX-style cubic removes that limit and may ring or overshoot. Compare at reduced NR working scale; full scale may look unchanged. No extra NR pass.");
     ImGui::TextWrapped("RGB residual applies NR's color change to the original-resolution image, retaining detail at reduced working scale. Not an antialiasing or performance fix. Legacy preserves existing behavior.");
     slider("Intensity", s.nr_intensity, 0.0F, 1.0F);
     if (ImGui::TreeNode("Advanced neural rendering")) {
@@ -865,6 +890,8 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             runtime.host_name ? runtime.host_name : "Standalone", renderer, key_name.c_str());
         ImGui::TextWrapped("Changes apply when you release a control and are saved automatically.");
         if (!r.message.empty()) ImGui::TextWrapped("%s", r.message.c_str());
+        draw_nr_benchmark(r, runtime);
+        ImGui::BeginDisabled(nr_benchmark.active);
         draw_nr_comparison(r, runtime);
         if (ImGui::CollapsingHeader("NR same-frame pipeline capture")) {
             ImGui::TextWrapped("One-shot D3D12 diagnostic: original, model input/output and restored pixels for each pass of two view chains. Starts in 10 seconds; close menus. Does not change tuning. Raw files are for analysis, not screenshots.");
@@ -872,9 +899,10 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             const auto capture_status=plain(member(r.snapshot,"nr_pipeline_capture"));
             ImGui::TextWrapped("%s",capture_status.c_str());
         }
+        ImGui::EndDisabled();
         ImGui::Separator();
         const auto previous = r.draft;
-        ImGui::BeginDisabled(nr_capture.active);
+        ImGui::BeginDisabled(nr_capture.active || nr_benchmark.active);
         if (ImGui::BeginTabBar("controls")) {
             if (begin_tab("General")) {
                 ImGui::SeparatorText("Menu");
@@ -983,7 +1011,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         }
         // Geometry/model controls can allocate expensive GPU resources. Keep a
         // local draft during dragging; commit only after the active edit ends.
-        if (!nr_capture.active && !ImGui::IsAnyItemActive()) {
+        if (!nr_capture.active && !nr_benchmark.active && !ImGui::IsAnyItemActive()) {
             Settings configured = previous;
             const auto current = member(r.snapshot, "settings");
 #define CHEEKY_SETTING(name, field) { const auto value = member(current, name); if (!value.empty()) set_named_setting(configured, name, value); }

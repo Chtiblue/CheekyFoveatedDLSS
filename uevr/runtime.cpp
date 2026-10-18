@@ -190,7 +190,13 @@ std::string snapshot_locked(State& s) {
             << ",\"u\":" << row.u << ",\"v\":" << row.v
             << ",\"crop_x\":" << row.crop_x << ",\"crop_y\":" << row.crop_y << '}';
     }
-    out << "]},\"nr\":\"" << json_escape(dlss_nr_state_name(nr.state)) << "\",\"nr_details\":{"
+    const auto nr_full_totals = diagnostic_timing_totals(DiagnosticGpuTiming::d3d12_full_dlss_nr);
+    const auto nr_foveated_totals = diagnostic_timing_totals(DiagnosticGpuTiming::d3d12_foveated_dlss_nr);
+    out << std::setprecision(17) << "]},\"nr_benchmark_timing\":{\"full_ms\":" << nr_full_totals.milliseconds
+        << ",\"full_count\":" << nr_full_totals.samples
+        << ",\"foveated_ms\":" << nr_foveated_totals.milliseconds
+        << ",\"foveated_count\":" << nr_foveated_totals.samples << '}' << std::setprecision(6);
+    out << ",\"nr\":\"" << json_escape(dlss_nr_state_name(nr.state)) << "\",\"nr_details\":{"
         << "\"route\":\"" << json_escape(dlss_nr_route_name(nr.route)) << "\",\"candidates\":" << nr.candidate_calls
         << ",\"evaluations\":" << nr.evaluation_calls << ",\"failures\":" << nr.failed_calls << ",\"result\":" << nr.last_result
         << ",\"output_width\":" << nr.output_width << ",\"output_height\":" << nr.output_height
@@ -612,7 +618,9 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
                 if (action == "nr_comparison_set") {
                     const auto key = line.substr(0, eq);
                     if (key != "NrEnabled" && key != "NrSecondPass" && key != "NrThirdPass" &&
-                        key != "NrColorPipeline" && key != "NrPass2ColorPipeline") return false;
+                        key != "NrColorPipeline" && key != "NrPass2ColorPipeline" &&
+                        key != "NrProcessingOrder" && key != "NrPreset" &&
+                        key != "NrPass2Preset" && key != "NrPass3Preset") return false;
                 }
                 if (line.starts_with("EyeCalibrationLearned")) {
                     s.message = "Learned calibration is read-only; use Reset learned calibration method"; return false;

@@ -143,6 +143,11 @@ This path can cost more shader work; compare GPU timings and actual appearance.
 
 ### NR resampling controls
 
+Each NR pass also offers **RenoDX-style cubic (unclamped)** as upsample value2.
+It preserves cubic overshoot instead of independently clamping proxy and model
+samples. It may ring around edges; compare at reduced NR working scale.
+Existing bilinear/clamped choices and defaults are unchanged.
+
 Each NR pass has **NR downsample filter** (Bilinear or Area) and **NR upsample
 filter** (Bilinear or Bicubic clamped). Bilinear remains the default for existing
 configurations. Area integrates the input pixel footprint; bicubic reconstructs

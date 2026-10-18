@@ -13,4 +13,5 @@ struct OverlayUiState {
 };
 void draw_overlay_ui(OverlayUiState&,const OverlayRuntime&,InputState&,const char* renderer,const char* status,bool& open);
 void tick_nr_comparison(OverlayUiState&, const OverlayRuntime&, bool menu_open);
+void tick_nr_benchmark(OverlayUiState&, const OverlayRuntime&, bool menu_open);
 }

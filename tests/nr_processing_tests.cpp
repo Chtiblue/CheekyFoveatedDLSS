@@ -107,7 +107,7 @@ int run_nr_processing_tests() {
             require(actual.nr_exposure_multiplier == expected && actual.nr_pass2_exposure_multiplier == expected &&
                 actual.nr_pass3_exposure_multiplier == expected, "Exposure must clamp finite values and replace nonfinite with identity");
         }
-        for (const auto requested : {0U, 1U, 2U, 0xffffffffU}) {
+        for (const auto requested : {0U, 1U, 2U, 3U, 0xffffffffU}) {
             auto settings = saved_settings;
             settings.nr_reconstruction = settings.nr_pass2_reconstruction = settings.nr_pass3_reconstruction = requested;
             settings.nr_downsample_filter = settings.nr_pass2_downsample_filter = settings.nr_pass3_downsample_filter = requested;
@@ -119,9 +119,12 @@ int run_nr_processing_tests() {
             require(actual.nr_reconstruction == expected && actual.nr_pass2_reconstruction == expected &&
                 actual.nr_pass3_reconstruction == expected, "Invalid NR reconstruction must use legacy mode");
             require(actual.nr_downsample_filter == expected && actual.nr_pass2_downsample_filter == expected &&
-                actual.nr_pass3_downsample_filter == expected && actual.nr_upsample_filter == expected &&
-                actual.nr_pass2_upsample_filter == expected && actual.nr_pass3_upsample_filter == expected,
-                "Invalid NR filters must default to bilinear in all passes");
+                actual.nr_pass3_downsample_filter == expected,
+                "Invalid NR downsample filters must default to bilinear in all passes");
+            const auto upsample = requested <= 2U ? requested : 0U;
+            require(actual.nr_upsample_filter == upsample && actual.nr_pass2_upsample_filter == upsample &&
+                actual.nr_pass3_upsample_filter == upsample,
+                "All passes must preserve RenoDX cubic and reject unknown upsample filters");
         }
         for (const auto requested : {0U, 1U, 2U, 3U, 5U, 7U, 10U, 11U, 12U, 13U, 0xffffffffU}) {
             auto settings = saved_settings;

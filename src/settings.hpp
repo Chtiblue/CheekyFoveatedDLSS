@@ -119,7 +119,7 @@ struct Settings {
     std::uint32_t nr_style{};
     std::uint32_t nr_reconstruction{}; // 0 legacy, 1 RGB residual
     std::uint32_t nr_downsample_filter{}; // 0 bilinear, 1 area
-    std::uint32_t nr_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_upsample_filter{}; // 0 bilinear, 1 clamped cubic, 2 RenoDX-style unclamped cubic
     std::uint32_t nr_color_pipeline{0};
     std::uint32_t nr_signal_encoding{0};
     std::uint32_t nr_scaling_domain{2};
@@ -146,7 +146,7 @@ struct Settings {
     std::uint32_t nr_pass2_style{0U};
     std::uint32_t nr_pass2_reconstruction{}; // 0 legacy, 1 RGB residual
     std::uint32_t nr_pass2_downsample_filter{}; // 0 bilinear, 1 area
-    std::uint32_t nr_pass2_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_pass2_upsample_filter{}; // 0 bilinear, 1 clamped cubic, 2 RenoDX-style unclamped cubic
     std::uint32_t nr_pass2_color_pipeline{0};
     std::uint32_t nr_pass2_signal_encoding{0};
     std::uint32_t nr_pass2_scaling_domain{2};
@@ -170,7 +170,7 @@ struct Settings {
     std::uint32_t nr_pass3_style{0U};
     std::uint32_t nr_pass3_reconstruction{}; // 0 legacy, 1 RGB residual
     std::uint32_t nr_pass3_downsample_filter{}; // 0 bilinear, 1 area
-    std::uint32_t nr_pass3_upsample_filter{}; // 0 bilinear, 1 bicubic
+    std::uint32_t nr_pass3_upsample_filter{}; // 0 bilinear, 1 clamped cubic, 2 RenoDX-style unclamped cubic
     std::uint32_t nr_pass3_color_pipeline{0};
     std::uint32_t nr_pass3_signal_encoding{0};
     std::uint32_t nr_pass3_scaling_domain{2};

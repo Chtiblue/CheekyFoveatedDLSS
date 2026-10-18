@@ -1,4 +1,4 @@
-Cheeky 0.5.5 - NR bridge preview 1 (2026-10-17)
+Cheeky 0.5.5 - NR bridge preview 2 (2026-10-18)
 Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
 
 UPGRADE PACKAGES, NOT FRESH INSTALLERS
@@ -33,6 +33,18 @@ existing Cheeky menu key (F11 in our Cyberpunk installation; upstream default F8
 
 WHAT CHANGED
 ============
+- Clear, per-pass NR network preset (Default/A/B) and NR appearance mode
+  (Model A/B/C) selections, with explanatory text. Standalone and UEVR use
+  mutually exclusive button rows; selecting a network does not change appearance.
+  On NR DLL 310.9.16, A requests the older/larger network and B the newer/faster
+  network; Default delegates to the DLL (reported as B for this version).
+  Appearance A/B/C are not speed/quality tiers. Older/patched DLLs can differ.
+- Standalone-only automatic after-upscaling gameplay network benchmark: all
+  enabled passes tested together, eye tracking active, settings restored.
+- Optional RenoDX-style unclamped cubic upsampling for each NR pass.
+- Bounded same-frame pipeline capture diagnostics (advanced investigation).
+
+Retained from preview 1:
 - Per-pass color bridge with smooth HDR compression/restoration, using original
   source brightness to restore the edited signal instead of hard clipping.
 - Signal encoding and resampling-domain choices: sRGB, PQ and linear.
@@ -76,7 +88,11 @@ INI equivalents, when editing with the game CLOSED:
 Use NrPass2 / NrPass3 instead of Nr for the other passes. Optional fields:
   Reconstruction=0 direct/legacy; 1 RGB residual
   DownsampleFilter=0 bilinear; 1 area
-  UpsampleFilter=0 bilinear; 1 clamped bicubic
+  UpsampleFilter=0 bilinear; 1 clamped bicubic; 2 RenoDX-style cubic (unclamped)
+The new unclamped cubic option preserves signed cubic overshoot instead of
+clamping model/proxy independently. It more closely matches the tested RenoDX
+shader, but can ring around edges. Compare at reduced working scale; at scale1
+it may have no visible effect. Existing filter values and defaults are unchanged.
 Legacy color pipeline remains the default (0). No example INI overwrites tuning.
 
 VERIFY AND LIMITS
@@ -87,13 +103,39 @@ counter stops. Successful log summaries identify colorPipeline and exposureTextu
 identity-fallback means texture-driven exposure is not being exercised, not that
 the whole NR effect is disabled. Counters are cumulative across passes/views.
 
-This is NOT full RenoDX parity. Exact cubic filtering, additional gamut paths and
+This is NOT full RenoDX parity. Full filter equivalence, additional gamut paths and
 temporal jitter equivalence remain unverified. D3D11 transport and Vulkan do not
 carry this new game-exposure texture; Vulkan's new color modes lack a dedicated
 pixel oracle. D3D12 is the primary validation path. No performance or appearance
 improvement is promised: Cyberpunk captures confirmed execution and increased
 cost, but did not establish a clear Legacy/new quality gain beyond scene drift.
 
+AUTOMATIC NETWORK BENCHMARK (STANDALONE ONLY)
+===========================================
+Enable NR, then open NR automatic network A/B benchmark and click
+Start after-upscaling A/B benchmark. Close the menu within five seconds and
+play normally for about 128 more seconds. No fixed gaze or stationary camera
+is required. Leave graphics/FG settings unchanged. Reopening the menu cancels.
+Native D3D12 only. No helper or screenshot capture is required for this test.
+
+Four balanced pairs (AB/BA/BA/AB) each use eight-second warmup and eight-second
+measurement windows. All enabled NR passes use the tested preset together;
+appearance, working scales and pass count are retained. Original processing
+order and presets restore automatically. Temporary values are not saved.
+Reports: CheekyFoveatedDLSS\nr-benchmarks\<run>\result.txt, with JSON snapshots.
+The report measures sampled GPU NR-block cost per view, NOT total frame time
+or generated FPS. It reports pair variation, excludes observed dimension
+mismatches, and marks inconsistent runs inconclusive. Dimension observations
+are not matched to individual GPU samples; scene changes remain a confounder.
+
+One Cyberpunk two-pass after-upscaling run with DLL 310.9.16.0 measured about
+7.21ms on A versus 4.12ms on B (42.9% lower NR cost; all four pairs agreed).
+This is not a promised FPS gain, a before-upscaling result, or proof of the
+DLL's resolved internal network identity. This test restored the original
+before-upscaling settings, which used B for pass1 and A for pass2.
+
+OPTIONAL MIRROR CAPTURE (SEPARATE FROM BENCHMARK)
+==============================================
 Standalone contains an optional seven-stage two-pass mirror comparison UI.
 It requires the separate cpvr_fov_image_audit.exe helper and nr-capture-openvr.txt
 pointing to SteamVR's openvr_api.dll beside the Host DLL. The helper is NOT bundled

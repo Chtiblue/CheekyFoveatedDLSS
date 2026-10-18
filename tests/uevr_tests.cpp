@@ -108,6 +108,10 @@ void settings_tests(const std::filesystem::path& root) {
     }
     require(!s.manual_stereo_mapping && !s.manual_stereo_right_first && !s.independent_openxr_gaze,
         "Gaze compatibility must be opt-in");
+    for (const auto key : {"NrUpsampleFilter", "NrPass2UpsampleFilter", "NrPass3UpsampleFilter"}) {
+        require(set_named_setting(s, key, "2"), "Parse RenoDX-style cubic for all passes");
+        require(field(settings_json(s), key) == 2.0, "RenoDX-style cubic missing from JSON");
+    }
     for (const auto key : {"ManualStereoMapping", "ManualStereoRightFirst", "IndependentOpenXRGaze"})
         require(set_named_setting(s, key, "true"), "Parse gaze compatibility option");
     require(!s.fix_motion_blur, "Motion blur compatibility is opt-in");
