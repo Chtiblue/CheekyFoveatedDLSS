@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 
@@ -67,6 +68,8 @@ constexpr auto timing_sample_interval = std::chrono::milliseconds(125);
 constexpr auto timing_publish_interval = std::chrono::milliseconds(250);
 
 struct GpuTimingAccumulator {
+    double total_ms{};
+    std::uint64_t total_samples{};
     std::atomic<std::int64_t> last_sample_ns{};
     std::mutex mutex;
     std::int64_t window_start_ns{};
@@ -112,10 +115,12 @@ void note_averaged_gpu_time(
     std::atomic<std::uint32_t>& destination,
     const float milliseconds
 ) noexcept {
-    if (!(milliseconds > 0.0F)) return;
+    if (!(milliseconds > 0.0F) || !std::isfinite(milliseconds)) return;
     const auto now = steady_now_ns();
     auto& accumulator = timing_accumulators[timing_index(timing)];
     std::lock_guard lock(accumulator.mutex);
+    accumulator.total_ms += milliseconds;
+    ++accumulator.total_samples;
     if (accumulator.window_start_ns == 0) {
         accumulator.window_start_ns = now;
     }
@@ -148,6 +153,13 @@ void note_averaged_gpu_time(
 }
 
 }  // namespace
+
+DiagnosticTimingTotals diagnostic_timing_totals(DiagnosticGpuTiming timing) noexcept {
+    if (timing >= DiagnosticGpuTiming::count) return {};
+    auto& accumulator = timing_accumulators[timing_index(timing)];
+    std::lock_guard lock(accumulator.mutex);
+    return {accumulator.total_ms, accumulator.total_samples};
+}
 
 void diagnostic_note_hook(const DiagnosticApi api) noexcept {
     for_api(api).hook_discovered.store(true, std::memory_order_release);

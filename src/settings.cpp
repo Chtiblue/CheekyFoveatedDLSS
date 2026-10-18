@@ -477,7 +477,7 @@ void update_settings(const Settings& settings) noexcept {
     nr_style.store((std::min)(settings.nr_style, 2U), std::memory_order_release);
     nr_reconstruction.store(settings.nr_reconstruction == 1U ? 1U : 0U, std::memory_order_release);
     nr_downsample_filter.store(settings.nr_downsample_filter == 1U ? 1U : 0U, std::memory_order_release);
-    nr_upsample_filter.store(settings.nr_upsample_filter == 1U ? 1U : 0U, std::memory_order_release);
+    nr_upsample_filter.store(settings.nr_upsample_filter <= 2U ? settings.nr_upsample_filter : 0U, std::memory_order_release);
     nr_color_pipeline.store(settings.nr_color_pipeline <= 2U ? settings.nr_color_pipeline : 0U, std::memory_order_release);
     nr_signal_encoding.store(settings.nr_signal_encoding <= 2U ? settings.nr_signal_encoding : 0U, std::memory_order_release);
     nr_scaling_domain.store(settings.nr_scaling_domain <= 2U ? settings.nr_scaling_domain : 2U, std::memory_order_release);
@@ -529,7 +529,7 @@ void update_settings(const Settings& settings) noexcept {
     nr_pass2_style.store((std::min)(settings.nr_pass2_style, 2U), std::memory_order_release);
     nr_pass2_reconstruction.store(settings.nr_pass2_reconstruction == 1U ? 1U : 0U, std::memory_order_release);
     nr_pass2_downsample_filter.store(settings.nr_pass2_downsample_filter == 1U ? 1U : 0U, std::memory_order_release);
-    nr_pass2_upsample_filter.store(settings.nr_pass2_upsample_filter == 1U ? 1U : 0U, std::memory_order_release);
+    nr_pass2_upsample_filter.store(settings.nr_pass2_upsample_filter <= 2U ? settings.nr_pass2_upsample_filter : 0U, std::memory_order_release);
     nr_pass2_color_pipeline.store(settings.nr_pass2_color_pipeline <= 2U ? settings.nr_pass2_color_pipeline : 0U, std::memory_order_release);
     nr_pass2_signal_encoding.store(settings.nr_pass2_signal_encoding <= 2U ? settings.nr_pass2_signal_encoding : 0U, std::memory_order_release);
     nr_pass2_scaling_domain.store(settings.nr_pass2_scaling_domain <= 2U ? settings.nr_pass2_scaling_domain : 2U, std::memory_order_release);
@@ -552,7 +552,7 @@ void update_settings(const Settings& settings) noexcept {
     nr_pass3_style.store((std::min)(settings.nr_pass3_style, 2U), std::memory_order_release);
     nr_pass3_reconstruction.store(settings.nr_pass3_reconstruction == 1U ? 1U : 0U, std::memory_order_release);
     nr_pass3_downsample_filter.store(settings.nr_pass3_downsample_filter == 1U ? 1U : 0U, std::memory_order_release);
-    nr_pass3_upsample_filter.store(settings.nr_pass3_upsample_filter == 1U ? 1U : 0U, std::memory_order_release);
+    nr_pass3_upsample_filter.store(settings.nr_pass3_upsample_filter <= 2U ? settings.nr_pass3_upsample_filter : 0U, std::memory_order_release);
     nr_pass3_color_pipeline.store(settings.nr_pass3_color_pipeline <= 2U ? settings.nr_pass3_color_pipeline : 0U, std::memory_order_release);
     nr_pass3_signal_encoding.store(settings.nr_pass3_signal_encoding <= 2U ? settings.nr_pass3_signal_encoding : 0U, std::memory_order_release);
     nr_pass3_scaling_domain.store(settings.nr_pass3_scaling_domain <= 2U ? settings.nr_pass3_scaling_domain : 2U, std::memory_order_release);

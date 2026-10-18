@@ -52,7 +52,7 @@ cbuffer CodecConstants : register(b0) {
     uint ShowAlignmentBorder;
     uint MaskCount;
     uint Reconstruction;
-    uint FilterFlags; // bit 0: area downsample; bit 1: bicubic upsample
+    uint FilterFlags; // bit 0: area; bit 1: cubic; bit 2: unclamped cubic
     float4 MaskBounds[4];
     uint ColorPipeline;
     uint SignalEncoding;
@@ -291,8 +291,10 @@ void LoadProxyNeuralBicubic(float2 position, out float4 proxy, out float4 neural
         }
     }
     // Limit negative lobes to the central footprint to avoid bright/dark halos.
-    proxy = clamp(proxy,pmin,pmax);
-    neural = clamp(neural,nmin,nmax);
+    if ((FilterFlags & 4U) == 0U) {
+        proxy = clamp(proxy,pmin,pmax);
+        neural = clamp(neural,nmin,nmax);
+    }
 }
 
 float3 UpgradeToneMap(float3 original, float3 proxy, float3 neural) {

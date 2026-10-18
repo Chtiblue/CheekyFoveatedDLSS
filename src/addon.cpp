@@ -7,6 +7,7 @@
 #include "gaze_foveation.hpp"
 #include "runtime.hpp"
 #include "settings.hpp"
+#include "nr_selection_help.hpp"
 #include "d3d12_ngx_dispatch.hpp"
 #include "support_report.hpp"
 #include "eye_calibration.hpp"
@@ -1526,9 +1527,12 @@ void draw_nr_controls(Settings& settings, bool& changed) {
             if (ImGui::TreeNode("Pass 2 DLSS 5 tuning")) {
                 changed |= ImGui::SliderFloat("Working scale##P2", &settings.nr_pass2_working_scale, 0.10F, 1.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 int p2preset = static_cast<int>(settings.nr_pass2_preset);
-                if (ImGui::SliderInt("DLSS-NR preset##P2", &p2preset, 0, 7)) { settings.nr_pass2_preset = static_cast<std::uint32_t>(p2preset); changed = true; }
+                if (ImGui::Combo("NR network preset##P2", &p2preset, "Default\0Preset A\0Preset B\0")) { settings.nr_pass2_preset = static_cast<std::uint32_t>(p2preset); changed = true; }
+                ImGui::TextWrapped("%s", nr_network_help(settings.nr_pass2_preset));
+                ImGui::TextWrapped("%s", nr_network_version_help);
                 int p2style = static_cast<int>(settings.nr_pass2_style);
-                if (ImGui::Combo("DLSS-NR style##P2", &p2style, "Standard\0Natural\0Cinematic\0")) { settings.nr_pass2_style = static_cast<std::uint32_t>(p2style); changed = true; }
+                if (ImGui::Combo("NR appearance mode##P2", &p2style, "Model A\0Model B\0Model C\0")) { settings.nr_pass2_style = static_cast<std::uint32_t>(p2style); changed = true; }
+                ImGui::TextWrapped("%s", nr_appearance_help(settings.nr_pass2_style));
                 changed |= ImGui::SliderFloat("Intensity##P2", &settings.nr_pass2_intensity, 0.0F, 1.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 changed |= ImGui::SliderFloat("Local tone strength##P2", &settings.nr_pass2_local_tone_strength, 0.0F, 2.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 changed |= ImGui::SliderFloat("Local structure strength##P2", &settings.nr_pass2_local_structure_strength, 0.0F, 2.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -1547,9 +1551,12 @@ void draw_nr_controls(Settings& settings, bool& changed) {
             if (settings.nr_third_pass && ImGui::TreeNode("Pass 3 DLSS 5 tuning")) {
                 changed |= ImGui::SliderFloat("Working scale##P3", &settings.nr_pass3_working_scale, 0.10F, 1.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 int p3preset = static_cast<int>(settings.nr_pass3_preset);
-                if (ImGui::SliderInt("DLSS-NR preset##P3", &p3preset, 0, 7)) { settings.nr_pass3_preset = static_cast<std::uint32_t>(p3preset); changed = true; }
+                if (ImGui::Combo("NR network preset##P3", &p3preset, "Default\0Preset A\0Preset B\0")) { settings.nr_pass3_preset = static_cast<std::uint32_t>(p3preset); changed = true; }
+                ImGui::TextWrapped("%s", nr_network_help(settings.nr_pass3_preset));
+                ImGui::TextWrapped("%s", nr_network_version_help);
                 int p3style = static_cast<int>(settings.nr_pass3_style);
-                if (ImGui::Combo("DLSS-NR style##P3", &p3style, "Standard\0Natural\0Cinematic\0")) { settings.nr_pass3_style = static_cast<std::uint32_t>(p3style); changed = true; }
+                if (ImGui::Combo("NR appearance mode##P3", &p3style, "Model A\0Model B\0Model C\0")) { settings.nr_pass3_style = static_cast<std::uint32_t>(p3style); changed = true; }
+                ImGui::TextWrapped("%s", nr_appearance_help(settings.nr_pass3_style));
                 changed |= ImGui::SliderFloat("Intensity##P3", &settings.nr_pass3_intensity, 0.0F, 1.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 changed |= ImGui::SliderFloat("Local tone strength##P3", &settings.nr_pass3_local_tone_strength, 0.0F, 2.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 changed |= ImGui::SliderFloat("Local structure strength##P3", &settings.nr_pass3_local_structure_strength, 0.0F, 2.0F, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -1631,12 +1638,15 @@ void draw_nr_controls(Settings& settings, bool& changed) {
         "%.2f"
     );
     int preset = static_cast<int>(settings.nr_preset);
-    if (ImGui::SliderInt("DLSS-NR preset", &preset, 0, 7)) { settings.nr_preset = static_cast<std::uint32_t>(preset); changed = true; }
+    if (ImGui::Combo("NR network preset", &preset, "Default\0Preset A\0Preset B\0")) { settings.nr_preset = static_cast<std::uint32_t>(preset); changed = true; }
+    ImGui::TextWrapped("%s", nr_network_help(settings.nr_preset));
+    ImGui::TextWrapped("%s", nr_network_version_help);
+    ImGui::TextWrapped("%s", nr_appearance_help(settings.nr_style));
     int style = static_cast<int>(settings.nr_style);
     if (ImGui::Combo(
-            "DLSS-NR style",
+            "NR appearance mode",
             &style,
-            "Standard\0Natural\0Cinematic\0"
+            "Model A\0Model B\0Model C\0"
         )) {
         settings.nr_style = static_cast<std::uint32_t>(style);
         changed = true;

@@ -970,7 +970,7 @@ void dispatch_codec(
         region.transition,
         settings.nr_alignment_border_enabled ? 1U : 0U,
         region.mask.count, settings.nr_reconstruction,
-        settings.nr_downsample_filter | (settings.nr_upsample_filter << 1U), {},
+        settings.nr_downsample_filter | (settings.nr_upsample_filter == 2U ? 6U : settings.nr_upsample_filter << 1U), {},
         settings.nr_color_pipeline, settings.nr_signal_encoding, settings.nr_exposure_mode,
         gpu.exposure_texture != nullptr ? 1U : 0U, settings.nr_exposure_multiplier, settings.nr_scaling_domain, {},
     };

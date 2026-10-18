@@ -40,6 +40,7 @@ bool cheeky_overlay_test_key_down(int key) { return key == VK_F8 ? test_f8_down 
 bool cheeky_overlay_test_foreground(HWND window) { return window && window == test_foreground; }
 std::unordered_map<std::string, ImVec2> control_positions;
 namespace cheeky::standalone {
+void test_nr_benchmark_controller();
 void overlay_test_control(const char* label) {
     const auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     control_positions[label] = ImVec2((a.x+b.x)*.5F, (a.y+b.y)*.5F);
@@ -112,6 +113,7 @@ void test_ui_diagnostics() {
     io.DisplaySize = ImVec2(800, 900);
     unsigned char* pixels{}; int width{}, height{};
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    test_nr_benchmark_controller();
     OverlayUiState state;
     InputState input;
     state.draft.center_mode = FoveationCenterMode::openxr_gaze;

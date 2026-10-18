@@ -37,6 +37,9 @@ enum class DiagnosticGpuTiming : std::uint32_t {
     count,
 };
 
+struct DiagnosticTimingTotals { double milliseconds{}; std::uint64_t samples{}; };
+DiagnosticTimingTotals diagnostic_timing_totals(DiagnosticGpuTiming timing) noexcept;
+
 enum class DiagnosticState : std::uint32_t {
     waiting,
     disabled,

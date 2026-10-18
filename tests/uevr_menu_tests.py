@@ -94,6 +94,7 @@ def run(engine):
                 return widget(label, value)
             end,
             button = function(label)
+                table.insert(drawn, label)
                 local hit = clicked[label]; clicked[label] = nil; return hit == true and not disabled[#disabled]
             end
         }
@@ -487,12 +488,12 @@ def run(engine):
     assert g["values"]["NR intensity"] is not None
     assert g.slider_ranges["NR intensity"][1] == 0 and g.slider_ranges["NR intensity"][2] == 1
     assert g["values"]["Skin structure"] is None, "Hide skin tuning without automatic masking"
-    assert set(g.combos["DLSS-NR preset"].keys()) == {0, 1, 2}
-    assert g.combos["DLSS-NR preset"][2] == "Preset B"
+    assert any("Preset B##NrPreset_2" in t for t in g.drawn.values())
     assert g.combos["NR reconstruction"][0] == "Legacy"
     assert g.combos["NR reconstruction"][1] == "RGB residual (experimental)"
     assert g.combos["NR downsample filter"][1] == "Area (experimental)"
     assert g.combos["NR upsample filter"][1] == "Bicubic clamped (experimental)"
+    assert g.combos["NR upsample filter"][2] == "RenoDX-style cubic (unclamped)"
     for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
         assert set(g.combos[label].keys()) == {0, 1, 2}, label
     assert g.combos["NR color pipeline"][0] == "Legacy"
@@ -503,7 +504,7 @@ def run(engine):
     draw()
     assert any("310.9.16.0" in t for t in g.drawn.values())
     assert any("C:\\NR test\\nvngx_dlssnr.dll" in t for t in g.drawn.values())
-    draw(changes={"DLSS-NR preset": 2})
+    draw(click="[ ] Preset B##NrPreset_2")
     assert "NrPreset=2" in last()
     state["request"] = state["applied_request"] = int(last().splitlines()[1])
     state["settings"]["NrPreset"] = 2
@@ -532,15 +533,23 @@ def run(engine):
     assert g["values"]["NR width"] is not None
     assert g.combos["Simulation pattern"][0] == "Figure eight (8 s)"
     assert g.combos["Simulation pattern"][5] == "Hold center"
-    assert g.combos["DLSS-NR style"][2] == "Cinematic"
+    assert all(any(f"Model {letter}##NrStyle_{i}" in t for t in g.drawn.values()) for i, letter in enumerate("ABC"))
     count = len(g.sent)
-    draw(changes={"DLSS-NR style": 2})
+    draw(click="[ ] Model C##NrStyle_2")
     assert len(g.sent) == count + 1 and "NrStyle=2" in last()
     state["request"] = state["applied_request"] = int(last().splitlines()[1])
     state["settings"]["NrStyle"] = 2
     receive(state)
     draw()
-    assert g["values"]["DLSS-NR style"] == 2, "Style acknowledgement was not retained"
+    assert "[x] Model C##NrStyle_2" in g.drawn.values(), "Appearance acknowledgement was not retained"
+    count = len(g.sent)
+    draw(click="[x] Model C##NrStyle_2")
+    assert len(g.sent) == count, "Clicking selected appearance must not deselect or resend"
+    help_text = " ".join(g.drawn.values())
+    assert "Model C: RenoDX appearance C" in help_text
+    assert "not speed or quality rankings" in help_text
+    assert "Version-specific: 310.8.0 had one network" in help_text
+    assert "Patched DLL behavior is not verified here" in help_text
     # Rendering order follows the same immediate apply and acknowledgement
     # flow as the existing selectors, while preserving working scale.
     state["settings"].update(NrProcessingOrder=0, NrWorkingScale=0.37)
@@ -698,12 +707,13 @@ def run(engine):
     receive(state)
     draw(changes={"Intensity##NrPass2": 0.42})
     for pass_number in (2, 3):
-        options = g.combos[f"DLSS-NR preset##NrPass{pass_number}"]
-        assert set(options.keys()) == {0, 1, 2}
-        assert options[0] == "Default" and options[1] == "Preset A"
+        for i, letter in enumerate("ABC"):
+            assert any(f"Model {letter}##NrPass{pass_number}Style_{i}" in t for t in g.drawn.values())
+        for i, label in enumerate(("Default", "Preset A", "Preset B")):
+            assert any(f"{label}##NrPass{pass_number}Preset_{i}" in t for t in g.drawn.values())
         assert set(g.combos[f"NR reconstruction##NrPass{pass_number}"].keys()) == {0, 1}
         assert set(g.combos[f"NR downsample filter##NrPass{pass_number}"].keys()) == {0, 1}
-        assert set(g.combos[f"NR upsample filter##NrPass{pass_number}"].keys()) == {0, 1}
+        assert set(g.combos[f"NR upsample filter##NrPass{pass_number}"].keys()) == {0, 1, 2}
         for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
             assert set(g.combos[f"{label}##NrPass{pass_number}"].keys()) == {0, 1, 2}
         assert g.slider_ranges[f"NR exposure multiplier##NrPass{pass_number}"][1] == 0.01

@@ -640,9 +640,9 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
     f.list->CopyTextureRegion(&color_dst,0,0,0,&color_src,nullptr);
     transition_resource(color_dst.pResource,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     f.params.Set("DLSS.Feature.Create.Flags", 2U);
-    for (float scale : {0.3F, 0.5F}) for (unsigned filters : {0U,1U,2U,3U}) {
+    for (float scale : {0.3F, 0.5F}) for (unsigned filters : {0U,1U,2U,3U,6U,7U}) {
         command((std::string("1\n96\nset\nNrReconstruction=0\nNrHdrTransferStrength=1\nNrColorStrength=1\nNrWorkingScale=") + std::to_string(scale) +
-            "\nNrDownsampleFilter=" + std::to_string(filters&1U) + "\nNrUpsampleFilter=" + std::to_string(filters>>1U)).c_str());
+            "\nNrDownsampleFilter=" + std::to_string(filters&1U) + "\nNrUpsampleFilter=" + std::to_string((filters&4U) ? 2U : filters>>1U)).c_str());
         evaluate(0);
         const auto reference = [&](unsigned pixel, unsigned extent, unsigned period) {
             const int working = (std::max)(32, int(float(extent)*scale + 0.5F));
@@ -668,7 +668,7 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
             const float t2=t*t,t3=t2*t;
             const float value=proxy(i-1)*(-0.5F*t+t2-0.5F*t3)+proxy(i)*(1.F-2.5F*t2+1.5F*t3)+
                 proxy(i+1)*(0.5F*t+2.F*t2-1.5F*t3)+proxy(i+2)*(-0.5F*t2+0.5F*t3);
-            return std::clamp(value,(std::min)(proxy(i),proxy(i+1)),(std::max)(proxy(i),proxy(i+1)));
+            return (filters&4U) ? value : std::clamp(value,(std::min)(proxy(i),proxy(i+1)),(std::max)(proxy(i),proxy(i+1)));
         };
         auto readback=make_buffer(256,D3D12_HEAP_TYPE_READBACK);
         D3D12_TEXTURE_COPY_LOCATION from{},to{};
